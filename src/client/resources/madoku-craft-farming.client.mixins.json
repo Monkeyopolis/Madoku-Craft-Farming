@@ -1,0 +1,11 @@
+{
+	"required": true,
+	"package": "madoku.craft.farming.mixin.client",
+	"compatibilityLevel": "JAVA_22",
+	"client": [
+		"MultiPlayerGameModeFarmingMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

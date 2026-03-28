@@ -1,0 +1,22 @@
+{
+	"required": true,
+	"package": "madoku.craft.farming.mixin",
+	"compatibilityLevel": "JAVA_22",
+	"mixins": [
+		"BlockFarmingDropsMixin",
+		"CropBlockFarmingMixin",
+		"FarmlandBlockFarmingMixin",
+		"ItemBuiltInRegistryHolderAccessor",
+		"ItemComponentsAccessor",
+		"ItemStackFarmingMixin",
+		"LootTableFarmingMixin",
+		"ServerPlayerGameModeFarmingMixin",
+		"StemBlockFarmingMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}
