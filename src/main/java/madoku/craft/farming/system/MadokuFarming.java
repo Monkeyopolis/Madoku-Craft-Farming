@@ -24,8 +24,8 @@ import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
@@ -1033,7 +1033,7 @@ public final class MadokuFarming {
 		}
 
 		String normalizedLevelId = MadokuScheduler.normalizeLevelIdentifier(levelId);
-		Identifier identifier = Identifier.tryParse(normalizedLevelId == null ? "" : normalizedLevelId);
+		ResourceLocation identifier = ResourceLocation.tryParse(normalizedLevelId == null ? "" : normalizedLevelId);
 		if (identifier == null) {
 			return null;
 		}
@@ -1164,7 +1164,7 @@ public final class MadokuFarming {
 			applyFarmingLore(rule);
 		}
 
-		Item boneMeal = BuiltInRegistries.ITEM.getValue(Identifier.tryParse("minecraft:bone_meal"));
+		Item boneMeal = BuiltInRegistries.ITEM.get(ResourceLocation.tryParse("minecraft:bone_meal"));
 		if (boneMeal != null) {
 			applyFertilizerLore(boneMeal);
 		}
@@ -1399,7 +1399,7 @@ public final class MadokuFarming {
 		if (item == null) {
 			return null;
 		}
-		Identifier id = BuiltInRegistries.ITEM.getKey(item);
+		ResourceLocation id = BuiltInRegistries.ITEM.getKey(item);
 		return id == null ? null : resolveCropRuleByPlantingItemId(id.toString());
 	}
 
@@ -1415,7 +1415,7 @@ public final class MadokuFarming {
 		if (state == null) {
 			return null;
 		}
-		Identifier id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+		ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
 		if (id == null) {
 			return null;
 		}
@@ -1525,7 +1525,7 @@ public final class MadokuFarming {
 			return null;
 		}
 
-		Identifier id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+		ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
 		if (id == null) {
 			return null;
 		}
@@ -1538,7 +1538,7 @@ public final class MadokuFarming {
 		if (state == null || rule == null) {
 			return false;
 		}
-		Identifier id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+		ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
 		if (id == null) {
 			return false;
 		}
@@ -1550,7 +1550,7 @@ public final class MadokuFarming {
 		if (state == null || rule == null) {
 			return false;
 		}
-		Identifier id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+		ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
 		if (id == null) {
 			return false;
 		}
@@ -1561,7 +1561,7 @@ public final class MadokuFarming {
 		if (state == null || rule == null || !rule.usesDistinctMatureBlock()) {
 			return false;
 		}
-		Identifier id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+		ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
 		if (id == null) {
 			return false;
 		}
@@ -1657,7 +1657,7 @@ public final class MadokuFarming {
 		if (trimmed.isEmpty()) {
 			return "";
 		}
-		Identifier identifier = Identifier.tryParse(trimmed);
+		ResourceLocation identifier = ResourceLocation.tryParse(trimmed);
 		return identifier == null ? trimmed.toLowerCase(java.util.Locale.ROOT) : identifier.toString();
 	}
 
@@ -2284,11 +2284,11 @@ public final class MadokuFarming {
 				blockedSeasonIds = fallback.blockedSeasonIds;
 			}
 
-			Identifier cropBlockIdentifier = Identifier.tryParse(cropBlockId);
-			Identifier matureBlockIdentifier = Identifier.tryParse(matureBlockId);
-			Identifier plantingIdentifier = Identifier.tryParse(plantingItemId);
-			Identifier harvestIdentifier = Identifier.tryParse(harvestItemId);
-			Identifier secondaryHarvestIdentifier = secondaryHarvestItemId.isBlank() ? null : Identifier.tryParse(secondaryHarvestItemId);
+			ResourceLocation cropBlockIdentifier = ResourceLocation.tryParse(cropBlockId);
+			ResourceLocation matureBlockIdentifier = ResourceLocation.tryParse(matureBlockId);
+			ResourceLocation plantingIdentifier = ResourceLocation.tryParse(plantingItemId);
+			ResourceLocation harvestIdentifier = ResourceLocation.tryParse(harvestItemId);
+			ResourceLocation secondaryHarvestIdentifier = secondaryHarvestItemId.isBlank() ? null : ResourceLocation.tryParse(secondaryHarvestItemId);
 			if (cropBlockIdentifier == null || matureBlockIdentifier == null || plantingIdentifier == null || harvestIdentifier == null) {
 				return fallback;
 			}
@@ -2338,16 +2338,16 @@ public final class MadokuFarming {
 			String normalizedPlantingItemId = MadokuCropConfig.normalizeRegistryId(plantingItemId);
 			String normalizedHarvestItemId = MadokuCropConfig.normalizeRegistryId(harvestItemId);
 			String normalizedSecondaryHarvestItemId = MadokuCropConfig.normalizeRegistryId(secondaryHarvestItemId);
-			Identifier cropBlockIdentifier = Identifier.tryParse(normalizedCropBlockId);
-			Identifier matureBlockIdentifier = Identifier.tryParse(normalizedMatureBlockId);
-			Identifier plantingIdentifier = Identifier.tryParse(normalizedPlantingItemId);
-			Identifier harvestIdentifier = Identifier.tryParse(normalizedHarvestItemId);
-			Identifier secondaryHarvestIdentifier = normalizedSecondaryHarvestItemId.isBlank() ? null : Identifier.tryParse(normalizedSecondaryHarvestItemId);
-			Block cropBlock = cropBlockIdentifier == null ? null : BuiltInRegistries.BLOCK.getValue(cropBlockIdentifier);
-			Block matureBlock = matureBlockIdentifier == null ? null : BuiltInRegistries.BLOCK.getValue(matureBlockIdentifier);
-			Item plantingItem = plantingIdentifier == null ? null : BuiltInRegistries.ITEM.getValue(plantingIdentifier);
-			Item harvestItem = harvestIdentifier == null ? null : BuiltInRegistries.ITEM.getValue(harvestIdentifier);
-			Item secondaryHarvestItem = secondaryHarvestIdentifier == null ? null : BuiltInRegistries.ITEM.getValue(secondaryHarvestIdentifier);
+			ResourceLocation cropBlockIdentifier = ResourceLocation.tryParse(normalizedCropBlockId);
+			ResourceLocation matureBlockIdentifier = ResourceLocation.tryParse(normalizedMatureBlockId);
+			ResourceLocation plantingIdentifier = ResourceLocation.tryParse(normalizedPlantingItemId);
+			ResourceLocation harvestIdentifier = ResourceLocation.tryParse(normalizedHarvestItemId);
+			ResourceLocation secondaryHarvestIdentifier = normalizedSecondaryHarvestItemId.isBlank() ? null : ResourceLocation.tryParse(normalizedSecondaryHarvestItemId);
+			Block cropBlock = cropBlockIdentifier == null ? null : BuiltInRegistries.BLOCK.get(cropBlockIdentifier);
+			Block matureBlock = matureBlockIdentifier == null ? null : BuiltInRegistries.BLOCK.get(matureBlockIdentifier);
+			Item plantingItem = plantingIdentifier == null ? null : BuiltInRegistries.ITEM.get(plantingIdentifier);
+			Item harvestItem = harvestIdentifier == null ? null : BuiltInRegistries.ITEM.get(harvestIdentifier);
+			Item secondaryHarvestItem = secondaryHarvestIdentifier == null ? null : BuiltInRegistries.ITEM.get(secondaryHarvestIdentifier);
 			Set<String> normalizedBlockedSeasons = blockedSeasonIds == null || blockedSeasonIds.isEmpty()
 				? Set.of()
 				: blockedSeasonIds.stream()
