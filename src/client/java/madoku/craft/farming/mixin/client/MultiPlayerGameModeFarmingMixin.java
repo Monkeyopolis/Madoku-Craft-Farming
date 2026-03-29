@@ -53,7 +53,7 @@ public abstract class MultiPlayerGameModeFarmingMixin {
 			return;
 		}
 
-		player.sendOverlayMessage(Component.literal(MadokuFarming.getCropSeasonBlockedMessage(stack, seasonId)));
+		player.displayClientMessage(Component.literal(MadokuFarming.getCropSeasonBlockedMessage(stack, seasonId)), true);
 		cir.setReturnValue(InteractionResult.FAIL);
 	}
 }

@@ -11,7 +11,6 @@ import madoku.craft.scheduler.MadokuScheduler;
 import madoku.craft.season.MadokuSeason;
 import madoku.craft.season.MadokuSeasonConfig;
 import madoku.craft.time.MadokuTime;
-import madoku.craft.farming.mixin.ItemBuiltInRegistryHolderAccessor;
 import madoku.craft.farming.mixin.ItemComponentsAccessor;
 import net.minecraft.ChatFormatting;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
@@ -1145,6 +1144,8 @@ public final class MadokuFarming {
 			cropRulesByCropBlockId = Map.copyOf(defaultCropRulesByCropBlockId());
 			cropRulesByMatureBlockId = Map.copyOf(defaultCropRulesByMatureBlockId());
 		}
+
+		applyCropItemMetadata();
 	}
 
 	/**
@@ -1175,11 +1176,14 @@ public final class MadokuFarming {
 		}
 
 		Item plantingItem = rule.plantingItem();
-		if (plantingItem == null) {
+		if (!(plantingItem instanceof ItemComponentsAccessor accessor)) {
 			return;
 		}
 
-		DataComponentMap base = plantingItem.components();
+		DataComponentMap base = accessor.madokuCraft$getComponents();
+		if (base == null) {
+			return;
+		}
 
 		List<Component> updatedLines = new ArrayList<>();
 		ItemLore currentLore = base.get(DataComponents.LORE);
@@ -1205,16 +1209,18 @@ public final class MadokuFarming {
 
 		DataComponentMap.Builder builder = DataComponentMap.builder().addAll(base);
 		builder.set(DataComponents.LORE, updatedLore);
-		((ItemComponentsAccessor) ((ItemBuiltInRegistryHolderAccessor) plantingItem).madokuCraft$getBuiltInRegistryHolder())
-			.madokuCraft$bindComponents(builder.build());
+		accessor.madokuCraft$setComponents(builder.build());
 	}
 
 	private static void applyFertilizerLore(Item item) {
-		if (item == null) {
+		if (item == null || !(item instanceof ItemComponentsAccessor accessor)) {
 			return;
 		}
 
-		DataComponentMap base = item.components();
+		DataComponentMap base = accessor.madokuCraft$getComponents();
+		if (base == null) {
+			return;
+		}
 
 		List<Component> updatedLines = new ArrayList<>();
 		ItemLore currentLore = base.get(DataComponents.LORE);
@@ -1238,8 +1244,7 @@ public final class MadokuFarming {
 
 		DataComponentMap.Builder builder = DataComponentMap.builder().addAll(base);
 		builder.set(DataComponents.LORE, updatedLore);
-		((ItemComponentsAccessor) ((ItemBuiltInRegistryHolderAccessor) item).madokuCraft$getBuiltInRegistryHolder())
-			.madokuCraft$bindComponents(builder.build());
+		accessor.madokuCraft$setComponents(builder.build());
 	}
 
 	private static String formatSeasonLoreLine(Set<String> blockedSeasonIds) {

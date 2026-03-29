@@ -1,5 +1,5 @@
 plugins {
-	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
 	id 'maven-publish'
 }
 
@@ -10,29 +10,7 @@ base {
 	archivesName = project.archives_base_name
 }
 
-def remapClasspathOutput = layout.buildDirectory.file("loom/remapClasspath.txt")
-def generateRemapClasspath = tasks.register("generateRemapClasspath") {
-	outputs.file(remapClasspathOutput)
-
-	doLast {
-		def classpathEntries = new LinkedHashSet<File>()
-		classpathEntries.addAll(sourceSets.main.runtimeClasspath.files)
-		classpathEntries.addAll(sourceSets.client.runtimeClasspath.files)
-		classpathEntries.addAll(configurations.minecraftLibraries.files)
-
-		def outputFile = remapClasspathOutput.get().asFile
-		outputFile.parentFile.mkdirs()
-		outputFile.text = classpathEntries.collect { it.absolutePath }.join(File.pathSeparator)
-	}
-}
-def remapClasspathFile = remapClasspathOutput.map { it.asFile.absolutePath }
-
 repositories {
-	// Add repositories to retrieve artifacts from in here.
-	// You should only use this when depending on other mods because
-	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
-	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
-	// for more information about repositories.
 	maven {
 		url = "https://www.cursemaven.com"
 		content {
@@ -52,95 +30,35 @@ loom {
 	}
 }
 
-tasks.matching { it.name in ["configureLaunch", "configureClientLaunch", "runClient", "runServer"] }.configureEach {
-	dependsOn generateRemapClasspath
-}
-
-def patchLaunchConfig = tasks.register("patchLaunchConfig") {
-	dependsOn generateRemapClasspath
-	inputs.file(file(".gradle/loom-cache/launch.cfg"))
-	outputs.file(file(".gradle/loom-cache/launch.cfg"))
-
-	doLast {
-		def launchFile = file(".gradle/loom-cache/launch.cfg")
-		if (!launchFile.exists()) {
-			return
-		}
-
-		def remapClasspathPath = remapClasspathFile.get()
-		def targetLine = "\tfabric.remapClasspathFile=${remapClasspathPath}"
-		def lines = launchFile.readLines("UTF-8")
-		if (lines.any { it == targetLine }) {
-			return
-		}
-
-		def insertAfter = lines.indexOf("\tfabric.defaultMixinRemapType=static")
-		if (insertAfter < 0) {
-			insertAfter = lines.indexOf("commonProperties")
-			if (insertAfter >= 0) {
-				insertAfter += 1
-			}
-		} else {
-			insertAfter += 1
-		}
-
-		if (insertAfter < 0) {
-			lines.add(0, targetLine)
-		} else {
-			lines.add(insertAfter, targetLine)
-		}
-
-		launchFile.text = lines.join(System.lineSeparator()) + System.lineSeparator()
-	}
-}
-
-tasks.matching { it.name in ["configureLaunch", "configureClientLaunch"] }.configureEach {
-	finalizedBy patchLaunchConfig
-}
-
 dependencies {
-	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-
-	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
-
-	// Fabric API. This is technically optional, but you probably want it anyway.
-	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-
-	// Madoku Craft API (required).
-	implementation "curse.maven:madoku-craft-api-1419561:${project.madoku_craft_api_version}"
+	mappings loom.officialMojangMappings()
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	modImplementation "curse.maven:madoku-craft-api-1419561:${project.madoku_craft_api_version}"
 }
 
 processResources {
 	inputs.property "version", project.version
-	inputs.property "minecraft_version", project.minecraft_version
 	inputs.property "madoku_craft_api_mod_version", project.madoku_craft_api_mod_version
 
 	filesMatching("fabric.mod.json") {
 		expand(
 			"version": inputs.properties.version,
-			"minecraft_version": inputs.properties.minecraft_version,
 			"madoku_craft_api_mod_version": inputs.properties.madoku_craft_api_mod_version
 		)
 	}
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 25
+	it.options.release = 21
 }
 
 java {
-	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
-	// if it is present.
-	// If you remove this line, sources will not be generated.
 	withSourcesJar()
 
-	toolchain {
-		languageVersion = JavaLanguageVersion.of(25)
-	}
-
-	sourceCompatibility = JavaVersion.VERSION_25
-	targetCompatibility = JavaVersion.VERSION_25
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
 }
 
 jar {
@@ -151,7 +69,6 @@ jar {
 	}
 }
 
-// configure the maven publication
 publishing {
 	publications {
 		create("mavenJava", MavenPublication) {
@@ -160,11 +77,6 @@ publishing {
 		}
 	}
 
-	// See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
 	repositories {
-		// Add repositories to publish to here.
-		// Notice: This block does NOT have the same function as the block in the top level.
-		// The repositories here will be used for publishing your artifact, not for
-		// retrieving dependencies.
 	}
 }
