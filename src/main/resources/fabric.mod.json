@@ -17,9 +17,6 @@
 	"entrypoints": {
 		"main": [
 			"madoku.craft.farming.Madokucraftfarming"
-		],
-		"client": [
-			"madoku.craft.farming.MadokucraftfarmingClient"
 		]
 	},
 	"mixins": [
