@@ -31,7 +31,7 @@
 	],
 	"depends": {
 		"fabricloader": ">=0.18.4",
-		"minecraft": "~1.21.11",
+		"minecraft": "~${minecraft_version}",
 		"java": ">=21",
 		"fabric-api": "*",
 		"madoku-craft-api": ">=${madoku_craft_api_mod_version}"

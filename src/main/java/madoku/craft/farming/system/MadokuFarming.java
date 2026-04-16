@@ -1145,7 +1145,6 @@ public final class MadokuFarming {
 			cropRulesByMatureBlockId = Map.copyOf(defaultCropRulesByMatureBlockId());
 		}
 
-		applyCropItemMetadata();
 	}
 
 	/**
