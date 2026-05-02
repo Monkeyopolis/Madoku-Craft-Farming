@@ -2,7 +2,9 @@
 
 Madoku Craft: Farming is a configurable Farming system.
 It allows users to customize Farming to their specific needs.
-This system adjusts how fast crops grow and their default yields.
+This system adjusts Crops to grow based on Time instead of randomly.
+It also modifies the Yield for Crops.
+Most of these features are customizable in the CONFIG files.
 
 ## Dependencies
 
@@ -11,9 +13,19 @@ This system adjusts how fast crops grow and their default yields.
 
 ## Implementation
 
-This MOD by default changes crops to grow through Time instead of randomly.
-Farmland can be fertilized using Bonemeal, which increases a crop's growing speed and yield.
-Rain also increases how fast crops grow.
-If Madoku Season is enabled, some crops can be planted in certain seasons.
-Melons and Pumpkins were modified to replace the plant's stem instead of the crop growing next to it.
-Crop growing speed and yield can be customized in the CONFIG files.
+Crop Growth:
+
+- All Crops grow based on in-game Time.
+- If Madoku Season is Enabled, some Crops will only grow during certain Seasons.
+- Crops grow faster when it Rains.
+
+Fertilizer:
+
+- Placing Bone-meal on Farmland fertlizes the block.
+- Fertilized Farmland allows Crops to grow faster and increases their Yield.
+
+Adjusted Crops:
+
+- Pumpkins and Melons no longer grow adjacent to their Stem.
+- Since Pumpkins and Melons replace their Stem, their Yield were adjusted accordingly.
+- This allows Pumpkins and Melons to grow similar to other Crops.

@@ -10,14 +10,10 @@ import java.util.Map;
 
 public final class MadokuCropConfig {
 	public static final String FIELD_CROP_ID = "cropId";
-	public static final String FIELD_CROP_BLOCK_ID = "cropBlockId";
 	public static final String FIELD_MATURE_BLOCK_ID = "matureBlockId";
-	public static final String FIELD_PLANTING_ITEM_ID = "plantingItemId";
-	public static final String FIELD_HARVEST_ITEM_ID = "harvestItemId";
-	public static final String FIELD_SECONDARY_HARVEST_ITEM_ID = "secondaryHarvestItemId";
-	public static final String FIELD_SECONDARY_MIN_HARVEST_COUNT = "secondaryMinHarvestCount";
-	public static final String FIELD_SECONDARY_MAX_HARVEST_COUNT = "secondaryMaxHarvestCount";
-	public static final String FIELD_GROWTH_MINECRAFT_DAYS = "growthMinecraftDays";
+	public static final String FIELD_MIN_HARVEST_SEEDS = "min-harvest-seeds";
+	public static final String FIELD_MAX_HARVEST_SEEDS = "max-harvest-seeds";
+	public static final String FIELD_GROWTH_TIME = "growth-time";
 	public static final String FIELD_MIN_HARVEST_COUNT = "minHarvestCount";
 	public static final String FIELD_MAX_HARVEST_COUNT = "maxHarvestCount";
 	public static final String FIELD_PLANTING_BLOCKED_SEASONS = "plantingBlockedSeasons";
@@ -201,20 +197,16 @@ public final class MadokuCropConfig {
 	) {
 		JsonObject root = new JsonObject();
 		root.addProperty(FIELD_CROP_ID, normalizeRegistryId(cropId));
-		root.addProperty(FIELD_CROP_BLOCK_ID, normalizeRegistryId(cropBlockId));
 		String normalizedMatureBlockId = normalizeRegistryId(matureBlockId);
 		if (!normalizedMatureBlockId.isEmpty() && !normalizedMatureBlockId.equals(normalizeRegistryId(cropBlockId))) {
 			root.addProperty(FIELD_MATURE_BLOCK_ID, normalizedMatureBlockId);
 		}
-		root.addProperty(FIELD_PLANTING_ITEM_ID, normalizeRegistryId(plantingItemId));
-		root.addProperty(FIELD_HARVEST_ITEM_ID, normalizeRegistryId(harvestItemId));
 		String normalizedSecondaryHarvestItemId = normalizeRegistryId(secondaryHarvestItemId);
 		if (!normalizedSecondaryHarvestItemId.isEmpty()) {
-			root.addProperty(FIELD_SECONDARY_HARVEST_ITEM_ID, normalizedSecondaryHarvestItemId);
-			root.addProperty(FIELD_SECONDARY_MIN_HARVEST_COUNT, Math.max(0, secondaryMinHarvestCount));
-			root.addProperty(FIELD_SECONDARY_MAX_HARVEST_COUNT, Math.max(Math.max(0, secondaryMinHarvestCount), secondaryMaxHarvestCount));
+			root.addProperty(FIELD_MIN_HARVEST_SEEDS, Math.max(0, secondaryMinHarvestCount));
+			root.addProperty(FIELD_MAX_HARVEST_SEEDS, Math.max(Math.max(0, secondaryMinHarvestCount), secondaryMaxHarvestCount));
 		}
-		root.addProperty(FIELD_GROWTH_MINECRAFT_DAYS, growthMinecraftDays);
+		root.addProperty(FIELD_GROWTH_TIME, growthMinecraftDays);
 		root.addProperty(FIELD_MIN_HARVEST_COUNT, Math.max(1, minHarvestCount));
 		root.addProperty(FIELD_MAX_HARVEST_COUNT, Math.max(Math.max(1, minHarvestCount), maxHarvestCount));
 		JsonArray seasons = new JsonArray();

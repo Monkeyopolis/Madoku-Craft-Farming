@@ -3,11 +3,13 @@ package madoku.craft.farming.system;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import madoku.craft.chunk.ChunkManagerSystem;
 import madoku.craft.clock.MadokuTicks;
-import madoku.craft.config.StaticJsonSystem;
-import madoku.craft.data.MadokuData;
+import madoku.craft.config.JsonManagerSystem;
+import madoku.craft.config.JsonStaticSystem;
+import madoku.craft.data.DataManagerSystem;
 import madoku.craft.debug.MadokuDebug;
-import madoku.craft.scheduler.MadokuScheduler;
+import madoku.craft.scheduler.SchedulerManagerSystem;
 import madoku.craft.season.MadokuSeason;
 import madoku.craft.season.MadokuSeasonConfig;
 import madoku.craft.time.MadokuTime;
@@ -45,6 +47,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,18 +70,17 @@ public final class MadokuFarming {
 	private static final String DATA_FILE_NAME = "madoku-farming";
 	private static final String FARMING_SCHEDULER_OWNER_ID = "farming_gameplay";
 	private static final String TASK_TYPE_FARMING_TICK = "farming_gameplay_tick";
-	private static final long FARMING_SCHEDULER_INTERVAL_TICKS = 20L;
-	private static final String FIELD_LEVEL_ID = "level_id";
-	private static final String FIELD_SOIL_POS = "soil_pos";
-	private static final String FIELD_CROP_POS = "crop_pos";
-	private static final String FIELD_CROP_ID = "crop_id";
+	private static final long FARMING_SCHEDULER_INTERVAL_TICKS = 5L;
+	private static final String FIELD_LEVEL_ID = "level-id";
+	private static final String FIELD_SOIL_POS = "soil-pos";
+	private static final String FIELD_CROP_POS = "crop-pos";
+	private static final String FIELD_CROP_ID = "crop-id";
 	private static final String FIELD_FERTILIZED = "fertilized";
-	private static final String FIELD_FERTILIZED_AT_ABSOLUTE_DAY_TIME = "fertilized_at_absolute_day_time";
-	private static final String FIELD_GROWTH_PROGRESS = "growth_progress";
-	private static final String FIELD_LAST_PARTICLE_EMISSION_TICKS = "last_particle_emission_ticks";
+	private static final String FIELD_FERTILIZED_AT_ABSOLUTE_DAY_TIME = "fertilized-at-absolute-day-time";
+	private static final String FIELD_GROWTH_PROGRESS = "growth-progress";
+	private static final String FIELD_LAST_PARTICLE_EMISSION_TICKS = "last-particle-emission-ticks";
 	private static final String FIELD_PLOTS = "plots";
 
-	private static final long AUTOSAVE_INTERVAL_TICKS = 60L * 20L;
 	private static final long FERTILIZATION_DECAY_TICKS = 3L * 24000L;
 	private static final long CROP_MISSING_GRACE_TICKS = 20L;
 	private static final long PARTICLE_COOLDOWN_MIN_TICKS = 100L;
@@ -104,7 +106,7 @@ public final class MadokuFarming {
 	public static void initialize() {
 		loadStaticConfig();
 		loadCropConfigs();
-		MadokuScheduler.registerTaskHandler(TASK_TYPE_FARMING_TICK, MadokuFarming::runFarmingTask);
+		SchedulerManagerSystem.registerTaskHandler(TASK_TYPE_FARMING_TICK, MadokuFarming::runFarmingTask);
 		PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, blockEntity) ->
 			handleBlockBreakBefore(world, pos, state, blockEntity)
 		);
@@ -125,9 +127,10 @@ public final class MadokuFarming {
 	}
 
 	public static void onServerStarted(MinecraftServer server) {
+		applyCropItemMetadata();
 		lastProcessedAbsoluteDayTime = MadokuTime.getCurrentAbsoluteDayTime(server.overworld());
-		farmingSchedulerId = MadokuScheduler.createOrGetScheduler(MadokuScheduler.SchedulerOwner.global(FARMING_SCHEDULER_OWNER_ID));
-		MadokuScheduler.clearQueuedRequests(farmingSchedulerId);
+		farmingSchedulerId = SchedulerManagerSystem.createOrGetScheduler(SchedulerManagerSystem.SchedulerBinding.global(FARMING_SCHEDULER_OWNER_ID));
+		SchedulerManagerSystem.clearQueuedRequests(farmingSchedulerId);
 		requestFarmingProcessing(server, FARMING_SCHEDULER_INTERVAL_TICKS);
 	}
 
@@ -142,11 +145,11 @@ public final class MadokuFarming {
 
 		loadStaticConfig();
 		loadCropConfigs();
-		MadokuData.createWorldData(server, DATA_FOLDER_NAME, DATA_FILE_NAME, createDefaultData());
-		JsonObject data = MadokuData.loadWorldData(server, DATA_FOLDER_NAME, DATA_FILE_NAME);
+		JsonObject data = DataManagerSystem.loadWorldData(server, DATA_FOLDER_NAME, DATA_FILE_NAME, createDefaultData());
 		applyPersistedData(data);
 		lastProcessedAbsoluteDayTime = MadokuTime.getCurrentAbsoluteDayTime(server.overworld());
-		lastAutosaveBucket = Math.floorDiv(MadokuTicks.getGameplayTicks(), AUTOSAVE_INTERVAL_TICKS);
+		long autoSaveIntervalTicks = DataManagerSystem.getAutoSaveIntervalTicks(server, DATA_FOLDER_NAME, DATA_FILE_NAME);
+		lastAutosaveBucket = Math.floorDiv(MadokuTicks.getGameplayTicks(), autoSaveIntervalTicks);
 		dirty = false;
 	}
 
@@ -155,7 +158,8 @@ public final class MadokuFarming {
 			return;
 		}
 
-		long bucket = Math.floorDiv(MadokuTicks.getGameplayTicks(), AUTOSAVE_INTERVAL_TICKS);
+		long autoSaveIntervalTicks = DataManagerSystem.getAutoSaveIntervalTicks(server, DATA_FOLDER_NAME, DATA_FILE_NAME);
+		long bucket = Math.floorDiv(MadokuTicks.getGameplayTicks(), autoSaveIntervalTicks);
 		if (bucket == lastAutosaveBucket) {
 			return;
 		}
@@ -171,7 +175,7 @@ public final class MadokuFarming {
 			return;
 		}
 
-		MadokuData.saveWorldData(server, DATA_FOLDER_NAME, DATA_FILE_NAME, toPersistedData());
+		DataManagerSystem.saveWorldData(server, DATA_FOLDER_NAME, DATA_FILE_NAME, toPersistedData());
 		dirty = false;
 	}
 
@@ -483,7 +487,7 @@ public final class MadokuFarming {
 		return true;
 	}
 
-	private static void runFarmingTask(MinecraftServer server, MadokuScheduler.TaskContext context, JsonObject payload) {
+	private static void runFarmingTask(MinecraftServer server, SchedulerManagerSystem.TaskContext context, JsonObject payload) {
 		if (context != null) {
 			farmingSchedulerId = context.getSchedulerId();
 		}
@@ -525,35 +529,54 @@ public final class MadokuFarming {
 		}
 
 		boolean changed = false;
-		List<String> removedKeys = new ArrayList<>();
-		List<Map.Entry<String, PlotState>> activeEntries = new ArrayList<>(activePlotsByKey.entrySet());
-		for (Map.Entry<String, PlotState> entry : activeEntries) {
+		Map<String, ServerLevel> worldsByLevelId = new LinkedHashMap<>();
+		Map<String, Map<Long, Boolean>> chunkLoadedStateByLevel = new LinkedHashMap<>();
+		for (PlotState activePlot : activePlotsByKey.values()) {
+			if (activePlot == null) {
+				continue;
+			}
+
+			String levelId = activePlot.levelId;
+			ServerLevel world = worldsByLevelId.get(levelId);
+			if (!worldsByLevelId.containsKey(levelId)) {
+				world = resolveLevel(server, levelId);
+				worldsByLevelId.put(levelId, world);
+			}
+
+			long chunkKey = chunkKeyFromBlockPos(activePlot.soilPos);
+			Map<Long, Boolean> chunkLoadedByKey = chunkLoadedStateByLevel.computeIfAbsent(levelId, ignored -> new LinkedHashMap<>());
+			if (!chunkLoadedByKey.containsKey(chunkKey)) {
+				chunkLoadedByKey.put(chunkKey, world != null && isChunkLoadedForChunk(world, chunkKey));
+			}
+		}
+
+		Iterator<Map.Entry<String, PlotState>> iterator = activePlotsByKey.entrySet().iterator();
+		while (iterator.hasNext()) {
+			Map.Entry<String, PlotState> entry = iterator.next();
 			String key = entry.getKey();
 			PlotState plot = entry.getValue();
 			if (plot == null) {
-				removedKeys.add(key);
-				activePlotsByKey.remove(key);
+				iterator.remove();
 				plotsByKey.remove(key);
 				changed = true;
 				continue;
 			}
 
-				ServerLevel world = resolveLevel(server, plot.levelId);
+				ServerLevel world = worldsByLevelId.get(plot.levelId);
 				BlockPos soilPos = BlockPos.of(plot.soilPos);
-						if (world == null) {
-							CropRule rule = plot.hasCrop() ? resolveCropRuleByPlantingItemId(plot.cropId) : null;
-							if (plot.hasCrop() && rule == null) {
-								removedKeys.add(key);
-								activePlotsByKey.remove(key);
-								plotsByKey.remove(key);
-							changed = true;
-							continue;
-						}
+				CropRule offlineRule = plot.hasCrop() ? resolveCropRuleByPlantingItemId(plot.cropId) : null;
+				if (world == null || !isChunkLoadedFromGrouping(chunkLoadedStateByLevel, plot.levelId, plot.soilPos)) {
+					if (plot.hasCrop() && offlineRule == null) {
+						iterator.remove();
+						plotsByKey.remove(key);
+						changed = true;
+						continue;
+					}
 
-					changed |= advancePlotWithoutWorld(plot, currentAbsoluteDayTime, deltaAbsoluteDayTime, rule);
+					changed |= advancePlotWithoutWorld(plot, currentAbsoluteDayTime, deltaAbsoluteDayTime, offlineRule);
 					if (!isActivePlot(plot)) {
-						activePlotsByKey.remove(key);
-						removedKeys.add(key);
+						iterator.remove();
+						plotsByKey.remove(key);
 						changed = true;
 					}
 					continue;
@@ -576,8 +599,7 @@ public final class MadokuFarming {
 									)
 								);
 							}
-						removedKeys.add(key);
-						activePlotsByKey.remove(key);
+						iterator.remove();
 						plotsByKey.remove(key);
 						changed = true;
 						continue;
@@ -602,12 +624,9 @@ public final class MadokuFarming {
 							changed = true;
 						}
 					if (!plot.fertilized) {
-						removedKeys.add(key);
-						activePlotsByKey.remove(key);
+						iterator.remove();
 						plotsByKey.remove(key);
 						changed = true;
-					} else {
-						refreshPlotActivity(world, soilPos, plot);
 					}
 					continue;
 				}
@@ -629,8 +648,7 @@ public final class MadokuFarming {
 									)
 								);
 							}
-						removedKeys.add(key);
-						activePlotsByKey.remove(key);
+						iterator.remove();
 						plotsByKey.remove(key);
 						changed = true;
 						continue;
@@ -654,15 +672,10 @@ public final class MadokuFarming {
 											plot.fertilizedAtAbsoluteDayTime = currentAbsoluteDayTime;
 										}
 										if (!plot.fertilized) {
-											removedKeys.add(key);
-											activePlotsByKey.remove(key);
+											iterator.remove();
 											plotsByKey.remove(key);
-										} else {
-											refreshPlotActivity(world, soilPos, plot);
 										}
 										changed = true;
-									} else {
-										refreshPlotActivity(world, soilPos, plot);
 									}
 									continue;
 								}
@@ -672,11 +685,8 @@ public final class MadokuFarming {
 									plot.fertilizedAtAbsoluteDayTime = currentAbsoluteDayTime;
 								}
 								if (!plot.fertilized) {
-									removedKeys.add(key);
-									activePlotsByKey.remove(key);
+									iterator.remove();
 									plotsByKey.remove(key);
-								} else {
-									refreshPlotActivity(world, soilPos, plot);
 								}
 								changed = true;
 								continue;
@@ -704,11 +714,8 @@ public final class MadokuFarming {
 								plot.fertilizedAtAbsoluteDayTime = currentAbsoluteDayTime;
 							}
 							if (!plot.fertilized) {
-								removedKeys.add(key);
-								activePlotsByKey.remove(key);
+								iterator.remove();
 								plotsByKey.remove(key);
-							} else {
-								refreshPlotActivity(world, soilPos, plot);
 							}
 							changed = true;
 							continue;
@@ -773,16 +780,9 @@ public final class MadokuFarming {
 						plot.growthProgress = 1.0d;
 					}
 				}
-
-				refreshPlotActivity(world, soilPos, plot);
 			}
 
-		for (String removedKey : removedKeys) {
-			plotsByKey.remove(removedKey);
-			activePlotsByKey.remove(removedKey);
-		}
-
-		if (changed || !removedKeys.isEmpty()) {
+		if (changed) {
 			dirty = true;
 		}
 	}
@@ -798,7 +798,7 @@ public final class MadokuFarming {
 			return;
 		}
 
-		farmingSchedulerId = MadokuScheduler.createOrGetScheduler(MadokuScheduler.SchedulerOwner.global(FARMING_SCHEDULER_OWNER_ID));
+		farmingSchedulerId = SchedulerManagerSystem.createOrGetScheduler(SchedulerManagerSystem.SchedulerBinding.global(FARMING_SCHEDULER_OWNER_ID));
 		if (enqueueFarmingTask(farmingSchedulerId, delayTicks)) {
 			farmingTaskScheduled = true;
 		} else {
@@ -808,7 +808,7 @@ public final class MadokuFarming {
 
 	private static String ensureFarmingSchedulerExists() {
 		if (farmingSchedulerId == null || farmingSchedulerId.isBlank()) {
-			farmingSchedulerId = MadokuScheduler.createOrGetScheduler(MadokuScheduler.SchedulerOwner.global(FARMING_SCHEDULER_OWNER_ID));
+			farmingSchedulerId = SchedulerManagerSystem.createOrGetScheduler(SchedulerManagerSystem.SchedulerBinding.global(FARMING_SCHEDULER_OWNER_ID));
 		}
 		return farmingSchedulerId;
 	}
@@ -818,15 +818,15 @@ public final class MadokuFarming {
 			return false;
 		}
 
-		MadokuScheduler.EnqueueStatus status = MadokuScheduler.enqueue(
+		SchedulerManagerSystem.EnqueueStatus status = SchedulerManagerSystem.enqueue(
 			schedulerId,
 			Math.max(0L, delayTicks),
 			TASK_TYPE_FARMING_TICK,
 			new JsonObject(),
-			MadokuScheduler.TickDomain.GAMEPLAY
+			SchedulerManagerSystem.TickDomain.GAMEPLAY
 		);
-		return status == MadokuScheduler.EnqueueStatus.ACCEPTED
-			|| status == MadokuScheduler.EnqueueStatus.QUEUE_FULL;
+		return status == SchedulerManagerSystem.EnqueueStatus.ACCEPTED
+			|| status == SchedulerManagerSystem.EnqueueStatus.QUEUE_FULL;
 	}
 
 	private static void processFertilizationDecayOnly(MinecraftServer server, long currentAbsoluteDayTime) {
@@ -835,28 +835,27 @@ public final class MadokuFarming {
 		}
 
 		boolean changed = false;
-		List<String> removedKeys = new ArrayList<>();
-			for (Map.Entry<String, PlotState> entry : new ArrayList<>(activePlotsByKey.entrySet())) {
-				String key = entry.getKey();
-				PlotState plot = entry.getValue();
-				if (plot == null) {
-					removedKeys.add(key);
-					continue;
-				}
-				if (!isActivePlot(plot)) {
-					removedKeys.add(key);
-				}
+		Iterator<Map.Entry<String, PlotState>> iterator = activePlotsByKey.entrySet().iterator();
+		while (iterator.hasNext()) {
+			Map.Entry<String, PlotState> entry = iterator.next();
+			String key = entry.getKey();
+			PlotState plot = entry.getValue();
+			if (plot == null) {
+				iterator.remove();
+				plotsByKey.remove(key);
+				changed = true;
+				continue;
 			}
-
-		for (String removedKey : removedKeys) {
-			activePlotsByKey.remove(removedKey);
-			PlotState plot = plotsByKey.get(removedKey);
-			if (plot != null && !plot.fertilized && !plot.hasCrop()) {
-				plotsByKey.remove(removedKey);
+			if (!isActivePlot(plot)) {
+				iterator.remove();
+				if (!plot.fertilized && !plot.hasCrop()) {
+					plotsByKey.remove(key);
+				}
+				changed = true;
 			}
 		}
 
-		if (changed || !removedKeys.isEmpty()) {
+		if (changed) {
 			dirty = true;
 		}
 	}
@@ -1025,7 +1024,33 @@ public final class MadokuFarming {
 		if (world == null) {
 			return "";
 		}
-		return MadokuScheduler.normalizeLevelIdentifier(world.dimension().toString());
+		return SchedulerManagerSystem.normalizeLevelIdentifier(world.dimension().toString());
+	}
+
+	private static boolean isChunkLoadedForChunk(ServerLevel world, long chunkKey) {
+		if (world == null) {
+			return false;
+		}
+		int chunkX = (int) (chunkKey >> 32);
+		int chunkZ = (int) chunkKey;
+		return ChunkManagerSystem.isChunkLoaded(world, chunkX, chunkZ);
+	}
+
+	private static boolean isChunkLoadedFromGrouping(Map<String, Map<Long, Boolean>> chunkLoadedStateByLevel, String levelId, long soilPos) {
+		if (chunkLoadedStateByLevel == null) {
+			return false;
+		}
+		Map<Long, Boolean> chunkLoadedByKey = chunkLoadedStateByLevel.get(levelId);
+		if (chunkLoadedByKey == null) {
+			return false;
+		}
+		return chunkLoadedByKey.getOrDefault(chunkKeyFromBlockPos(soilPos), false);
+	}
+
+	private static long chunkKeyFromBlockPos(long blockPos) {
+		int chunkX = BlockPos.getX(blockPos) >> 4;
+		int chunkZ = BlockPos.getZ(blockPos) >> 4;
+		return (((long) chunkX) << 32) ^ (chunkZ & 0xFFFFFFFFL);
 	}
 
 	private static ServerLevel resolveLevel(MinecraftServer server, String levelId) {
@@ -1033,7 +1058,7 @@ public final class MadokuFarming {
 			return null;
 		}
 
-		String normalizedLevelId = MadokuScheduler.normalizeLevelIdentifier(levelId);
+		String normalizedLevelId = SchedulerManagerSystem.normalizeLevelIdentifier(levelId);
 		Identifier identifier = Identifier.tryParse(normalizedLevelId == null ? "" : normalizedLevelId);
 		if (identifier == null) {
 			return null;
@@ -1091,12 +1116,12 @@ public final class MadokuFarming {
 		Settings fallback = Settings.defaults();
 
 		try {
-			Path directory = StaticJsonSystem.getOrCreateGlobalSystemDirectory(FARMING_CONFIG_ROOT_FOLDER_NAME);
+			Path directory = JsonManagerSystem.getOrCreateGlobalSystemDirectory(FARMING_CONFIG_ROOT_FOLDER_NAME);
 			Path configFile = resolveJsonFile(directory, FARMING_CONFIG_FILE_NAME);
-			JsonObject normalized = StaticJsonSystem.ensureManagedFile(configFile, defaults);
+			JsonObject normalized = JsonStaticSystem.ensureManagedFile(configFile, defaults);
 			Settings loaded = Settings.fromJson(normalized);
 			JsonObject cleaned = loaded.toConfigJson();
-			StaticJsonSystem.writeManagedFile(configFile, cleaned, defaults);
+			JsonStaticSystem.writeManagedFile(configFile, cleaned, defaults);
 			settings = loaded;
 		} catch (IOException | RuntimeException exception) {
 			settings = fallback;
@@ -1111,12 +1136,12 @@ public final class MadokuFarming {
 		Map<String, JsonObject> defaultFiles = MadokuCropConfig.buildDefaultCropFileDefaults();
 
 		try {
-			Path directory = StaticJsonSystem.getOrCreateGlobalSystemDirectory(CROP_CONFIG_ROOT_FOLDER_NAME);
+			Path directory = JsonManagerSystem.getOrCreateGlobalSystemDirectory(CROP_CONFIG_ROOT_FOLDER_NAME);
 			for (Map.Entry<String, JsonObject> entry : defaultFiles.entrySet()) {
 				String fileKey = entry.getKey();
 				JsonObject defaults = entry.getValue();
 				Path file = resolveJsonFile(directory, fileKey);
-				JsonObject normalized = StaticJsonSystem.ensureManagedFile(file, defaults);
+				JsonObject normalized = JsonStaticSystem.ensureManagedFile(file, defaults);
 				CropRule rule = CropRule.fromJson(fileKey, normalized);
 				if (rule == null) {
 					rule = CropRule.fromJson(fileKey, defaults);
@@ -1129,7 +1154,7 @@ public final class MadokuFarming {
 					}
 
 					JsonObject cleaned = rule.toJson();
-					StaticJsonSystem.writeManagedFile(file, cleaned, defaults);
+					JsonStaticSystem.writeManagedFile(file, cleaned, defaults);
 					plantingRules.put(rule.plantingItemId(), rule);
 					blockRules.put(rule.cropBlockId(), rule);
 					if (rule.usesDistinctMatureBlock()) {
@@ -1147,10 +1172,6 @@ public final class MadokuFarming {
 		}
 	}
 
-	/**
-	 * Compat hook for mods that provide item-system integration.
-	 * Standalone Farming no longer invokes this automatically.
-	 */
 	public static void applyCropItemMetadata() {
 		if (!settings.enabled) {
 			return;
@@ -2219,33 +2240,18 @@ public final class MadokuFarming {
 				cropId = fallback.cropId;
 			}
 
-			String cropBlockId = MadokuCropConfig.normalizeRegistryId(readString(source, MadokuCropConfig.FIELD_CROP_BLOCK_ID, fallback.cropBlockId));
-			if (cropBlockId.isEmpty()) {
-				cropBlockId = fallback.cropBlockId;
-			}
-
+			String cropBlockId = fallback.cropBlockId;
 			String matureBlockId = MadokuCropConfig.normalizeRegistryId(readString(source, MadokuCropConfig.FIELD_MATURE_BLOCK_ID, fallback.matureBlockId));
 			if (matureBlockId.isEmpty()) {
 				matureBlockId = fallback.matureBlockId;
 			}
 
-			String plantingItemId = MadokuCropConfig.normalizeRegistryId(readString(source, MadokuCropConfig.FIELD_PLANTING_ITEM_ID, fallback.plantingItemId));
-			if (plantingItemId.isEmpty()) {
-				plantingItemId = fallback.plantingItemId;
-			}
-
-			String harvestItemId = MadokuCropConfig.normalizeRegistryId(readString(source, MadokuCropConfig.FIELD_HARVEST_ITEM_ID, fallback.harvestItemId));
-			if (harvestItemId.isEmpty()) {
-				harvestItemId = fallback.harvestItemId;
-			}
-
-			String secondaryHarvestItemId = MadokuCropConfig.normalizeRegistryId(readString(source, MadokuCropConfig.FIELD_SECONDARY_HARVEST_ITEM_ID, fallback.secondaryHarvestItemId));
-			if (secondaryHarvestItemId.isEmpty()) {
-				secondaryHarvestItemId = fallback.secondaryHarvestItemId;
-			}
+			String plantingItemId = fallback.plantingItemId;
+			String harvestItemId = fallback.harvestItemId;
+			String secondaryHarvestItemId = fallback.secondaryHarvestItemId;
 
 			double growthDays = clampDouble(
-				readDouble(source, MadokuCropConfig.FIELD_GROWTH_MINECRAFT_DAYS, fallback.growthMinecraftDays),
+				readDouble(source, MadokuCropConfig.FIELD_GROWTH_TIME, fallback.growthMinecraftDays),
 				fallback.growthMinecraftDays,
 				0.25d,
 				365.0d
@@ -2263,13 +2269,13 @@ public final class MadokuFarming {
 				1024
 			);
 			int secondaryMinHarvestCount = clampInt(
-				readInt(source, MadokuCropConfig.FIELD_SECONDARY_MIN_HARVEST_COUNT, fallback.secondaryMinHarvestCount),
+				readInt(source, MadokuCropConfig.FIELD_MIN_HARVEST_SEEDS, fallback.secondaryMinHarvestCount),
 				fallback.secondaryMinHarvestCount,
 				0,
 				1024
 			);
 			int secondaryMaxHarvestCount = clampInt(
-				readInt(source, MadokuCropConfig.FIELD_SECONDARY_MAX_HARVEST_COUNT, fallback.secondaryMaxHarvestCount),
+				readInt(source, MadokuCropConfig.FIELD_MAX_HARVEST_SEEDS, fallback.secondaryMaxHarvestCount),
 				fallback.secondaryMaxHarvestCount,
 				secondaryMinHarvestCount,
 				1024
@@ -2406,18 +2412,14 @@ public final class MadokuFarming {
 		private JsonObject toJson() {
 			JsonObject root = new JsonObject();
 			root.addProperty(MadokuCropConfig.FIELD_CROP_ID, cropId);
-			root.addProperty(MadokuCropConfig.FIELD_CROP_BLOCK_ID, cropBlockId);
 			if (usesDistinctMatureBlock()) {
 				root.addProperty(MadokuCropConfig.FIELD_MATURE_BLOCK_ID, matureBlockId);
 			}
-			root.addProperty(MadokuCropConfig.FIELD_PLANTING_ITEM_ID, plantingItemId);
-			root.addProperty(MadokuCropConfig.FIELD_HARVEST_ITEM_ID, harvestItemId);
 			if (secondaryHarvestItemId != null && !secondaryHarvestItemId.isBlank() && secondaryHarvestItem != null) {
-				root.addProperty(MadokuCropConfig.FIELD_SECONDARY_HARVEST_ITEM_ID, secondaryHarvestItemId);
-				root.addProperty(MadokuCropConfig.FIELD_SECONDARY_MIN_HARVEST_COUNT, secondaryMinHarvestCount);
-				root.addProperty(MadokuCropConfig.FIELD_SECONDARY_MAX_HARVEST_COUNT, secondaryMaxHarvestCount);
+				root.addProperty(MadokuCropConfig.FIELD_MIN_HARVEST_SEEDS, secondaryMinHarvestCount);
+				root.addProperty(MadokuCropConfig.FIELD_MAX_HARVEST_SEEDS, secondaryMaxHarvestCount);
 			}
-			root.addProperty(MadokuCropConfig.FIELD_GROWTH_MINECRAFT_DAYS, growthMinecraftDays);
+			root.addProperty(MadokuCropConfig.FIELD_GROWTH_TIME, growthMinecraftDays);
 			root.addProperty(MadokuCropConfig.FIELD_MIN_HARVEST_COUNT, minHarvestCount);
 			root.addProperty(MadokuCropConfig.FIELD_MAX_HARVEST_COUNT, maxHarvestCount);
 			JsonArray blockedSeasons = new JsonArray();
@@ -2589,7 +2591,7 @@ public final class MadokuFarming {
 			}
 
 			private static Settings fromJson(JsonObject source) {
-				boolean enabled = readBoolean(source, MadokuFarmingConfig.FIELD_FARMING_SYSTEM_ENABLED, true);
+				boolean enabled = readBoolean(source, MadokuFarmingConfig.FIELD_ENABLED, true);
 				double rainBonus = clampDouble(
 					readDouble(source, MadokuFarmingConfig.FIELD_RAIN_GROWTH_BONUS, MadokuFarmingConfig.DEFAULT_RAIN_GROWTH_BONUS),
 					MadokuFarmingConfig.DEFAULT_RAIN_GROWTH_BONUS,
@@ -2640,7 +2642,7 @@ public final class MadokuFarming {
 
 			private JsonObject toConfigJson() {
 				JsonObject root = new JsonObject();
-				root.addProperty(MadokuFarmingConfig.FIELD_FARMING_SYSTEM_ENABLED, enabled);
+				root.addProperty(MadokuFarmingConfig.FIELD_ENABLED, enabled);
 				root.addProperty(MadokuFarmingConfig.FIELD_RAIN_GROWTH_BONUS, rainGrowthBonus);
 				root.addProperty(MadokuFarmingConfig.FIELD_FERTILIZED_GROWTH_BONUS, fertilizedGrowthBonus);
 				root.addProperty(MadokuFarmingConfig.FIELD_OUT_OF_SEASON_GROWTH_MULTIPLIER, outOfSeasonGrowthMultiplier);

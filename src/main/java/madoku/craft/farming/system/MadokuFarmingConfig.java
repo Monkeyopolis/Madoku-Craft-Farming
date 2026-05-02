@@ -3,7 +3,7 @@ package madoku.craft.farming.system;
 import com.google.gson.JsonObject;
 
 public final class MadokuFarmingConfig {
-	public static final String FIELD_FARMING_SYSTEM_ENABLED = "farmingSystemEnabled";
+	public static final String FIELD_ENABLED = "enabled";
 	public static final String FIELD_RAIN_GROWTH_BONUS = "rainGrowthBonus";
 	public static final String FIELD_FERTILIZED_GROWTH_BONUS = "fertilizedGrowthBonus";
 	public static final String FIELD_OUT_OF_SEASON_GROWTH_MULTIPLIER = "outOfSeasonGrowthMultiplier";
@@ -24,7 +24,7 @@ public final class MadokuFarmingConfig {
 
 	public static JsonObject buildFarmingDefaults() {
 		JsonObject defaults = new JsonObject();
-		defaults.addProperty(FIELD_FARMING_SYSTEM_ENABLED, true);
+		defaults.addProperty(FIELD_ENABLED, true);
 		defaults.addProperty(FIELD_RAIN_GROWTH_BONUS, DEFAULT_RAIN_GROWTH_BONUS);
 		defaults.addProperty(FIELD_FERTILIZED_GROWTH_BONUS, DEFAULT_FERTILIZED_GROWTH_BONUS);
 		defaults.addProperty(FIELD_OUT_OF_SEASON_GROWTH_MULTIPLIER, DEFAULT_OUT_OF_SEASON_GROWTH_MULTIPLIER);
