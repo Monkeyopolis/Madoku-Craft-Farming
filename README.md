@@ -11,7 +11,7 @@ Most of these features are customizable in the CONFIG files.
 - Fabric API
 - Madoku Craft API
 
-## Implementation
+## Features
 
 Crop Growth:
 

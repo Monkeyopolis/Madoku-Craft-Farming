@@ -114,13 +114,18 @@ public abstract class ItemStackFarmingMixin {
 	@Inject(method = "useOn", at = @At("RETURN"))
 	private void madokuCraft$trackCropPlanting(UseOnContext context, CallbackInfoReturnable<InteractionResult> cir) {
 		ItemStack stack = (ItemStack) (Object) this;
-		if (!MadokuFarming.isEnabled() || context == null || stack.isEmpty() || !MadokuFarming.isCropPlantItem(stack)) {
+		if (!MadokuFarming.isEnabled() || context == null) {
+			madokuCraft$preUseOnCount = -1;
+			return;
+		}
+		boolean cropPlantAttempt = madokuCraft$preUseOnCount >= 0;
+		if (!cropPlantAttempt) {
 			madokuCraft$preUseOnCount = -1;
 			return;
 		}
 
 		InteractionResult result = cir.getReturnValue();
-		if (result != InteractionResult.SUCCESS && result != InteractionResult.CONSUME) {
+		if (result == null || !result.consumesAction()) {
 			madokuCraft$restoreUseOnCount(stack);
 			madokuCraft$preUseOnCount = -1;
 			return;
@@ -133,19 +138,16 @@ public abstract class ItemStackFarmingMixin {
 
 		BlockPos soilPos = madokuCraft$getCropPlantingSoilPos(context);
 		if (soilPos == null || !MadokuFarming.isFarmland(level.getBlockState(soilPos))) {
-			return;
-		}
-
-		if (!MadokuFarming.canPlantCrop(stack, serverLevel)) {
+			madokuCraft$preUseOnCount = -1;
 			return;
 		}
 
 		BlockState cropState = level.getBlockState(soilPos.above());
 		if (!MadokuFarming.isManagedCrop(cropState)) {
+			madokuCraft$preUseOnCount = -1;
 			return;
 		}
 
-		MadokuFarming.registerCropPlanting(serverLevel, soilPos, stack);
 		MadokuFarming.syncPlotFromSoil(serverLevel, soilPos, MadokuFarming.isFertilized(serverLevel, soilPos));
 		madokuCraft$preUseOnCount = -1;
 	}

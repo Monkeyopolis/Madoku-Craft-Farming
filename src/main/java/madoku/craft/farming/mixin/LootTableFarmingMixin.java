@@ -61,6 +61,7 @@ public abstract class LootTableFarmingMixin {
 			drops.add(new ItemStack(secondaryHarvestItem, secondaryCount));
 		}
 		MadokuFarming.emitPendingHarvestUsedDebug(level, pos, state, "loot_table");
+		MadokuFarming.completeCropHarvest(level, pos, state);
 		cir.setReturnValue(drops);
 	}
 
