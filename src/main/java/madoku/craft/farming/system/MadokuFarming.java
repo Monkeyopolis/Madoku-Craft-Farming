@@ -71,7 +71,8 @@ public final class MadokuFarming {
 	private static final String FARMING_PROCESS_SCHEDULER_OWNER_ID = "farming_process_gameplay";
 	private static final String TASK_TYPE_FARMING_DISCOVERY_TICK = "farming_discovery_gameplay_tick";
 	private static final String TASK_TYPE_FARMING_PROCESS_TICK = "farming_process_gameplay_tick";
-	private static final long FARMING_SCHEDULER_INTERVAL_TICKS = 5L;
+	private static final long FARMING_SCHEDULER_MIN_INTERVAL_TICKS = 1L;
+	private static final long FARMING_SCHEDULER_MAX_INTERVAL_TICKS = 20L;
 	private static final String CHUNK_PROCESSOR_FARMING_DISCOVERY_ID = "farming_discovery";
 
 	private static final String FIELD_PLOTS = "plots";
@@ -184,12 +185,15 @@ public final class MadokuFarming {
 		lastAutosaveBucket = Long.MIN_VALUE;
 		resetChunkProcessingCycle();
 		dirty = false;
+		SchedulerManagerSystem.clearAdaptiveDelayState(FARMING_PROCESS_SCHEDULER_OWNER_ID);
 	}
 
 	public static void onServerStarted(MinecraftServer server) {
 		if (server == null) {
 			return;
 		}
+		syncChunkProcessorActivation();
+		SchedulerManagerSystem.clearAdaptiveDelayState(FARMING_PROCESS_SCHEDULER_OWNER_ID);
 		applyCropItemMetadata();
 		ChunkManagerSystem.resetChunkProcessor(CHUNK_PROCESSOR_FARMING_DISCOVERY_ID);
 		resetChunkProcessingCycle();
@@ -216,6 +220,7 @@ public final class MadokuFarming {
 
 		loadStaticConfig();
 		loadCropConfigs();
+		syncChunkProcessorActivation();
 		JsonObject data = DataManagerSystem.loadWorldData(server, DATA_FOLDER_NAME, DATA_FILE_NAME, createDefaultData());
 		applyPersistedData(data);
 		long autoSaveIntervalTicks = DataManagerSystem.getAutoSaveIntervalTicks(server, DATA_FOLDER_NAME, DATA_FILE_NAME);
@@ -251,6 +256,10 @@ public final class MadokuFarming {
 
 	public static boolean isEnabled() {
 		return settings.enabled;
+	}
+
+	private static void syncChunkProcessorActivation() {
+		ChunkManagerSystem.setChunkProcessorActive(CHUNK_PROCESSOR_FARMING_DISCOVERY_ID, settings.enabled);
 	}
 
 	public static boolean isCropPlantItem(ItemStack stack) {
@@ -373,7 +382,7 @@ public final class MadokuFarming {
 			plot.lastParticleEmissionTimeTicks = Long.MIN_VALUE;
 			dirty = true;
 		}
-		requestFarmingProcessing(world.getServer(), FARMING_SCHEDULER_INTERVAL_TICKS);
+		requestFarmingProcessing(world.getServer(), resolveFarmingSchedulerInterval(world.getServer()));
 		emitFertilizedParticles(world, soilPos, plot);
 	}
 
@@ -420,7 +429,7 @@ public final class MadokuFarming {
 
 		if (changed) {
 			dirty = true;
-			requestFarmingProcessing(world.getServer(), FARMING_SCHEDULER_INTERVAL_TICKS);
+			requestFarmingProcessing(world.getServer(), resolveFarmingSchedulerInterval(world.getServer()));
 		}
 		if (fertilized && changed) {
 			emitFertilizedParticles(world, soilPos, plot);
@@ -451,7 +460,7 @@ public final class MadokuFarming {
 		}
 
 		trackCrop(world, cropPos, cropState);
-		requestFarmingProcessing(world.getServer(), FARMING_SCHEDULER_INTERVAL_TICKS);
+		requestFarmingProcessing(world.getServer(), resolveFarmingSchedulerInterval(world.getServer()));
 	}
 
 	public static void trackCrop(ServerLevel world, BlockPos cropPos, BlockState cropState) {
@@ -740,7 +749,7 @@ public final class MadokuFarming {
 		);
 		purgeExpiredPendingHarvestRules();
 		ChunkManagerSystem.runChunkProcessorProcessingStep(server, CHUNK_PROCESSOR_FARMING_DISCOVERY_ID);
-		requestFarmingProcessTask(server, FARMING_SCHEDULER_INTERVAL_TICKS);
+		requestFarmingProcessTask(server, resolveFarmingSchedulerInterval(server));
 	}
 
 	private static void resetChunkProcessingCycle() {
@@ -1195,6 +1204,15 @@ public final class MadokuFarming {
 
 	private static void requestFarmingProcessing(MinecraftServer server, long delayTicks) {
 		requestFarmingProcessTask(server, delayTicks);
+	}
+
+	private static long resolveFarmingSchedulerInterval(MinecraftServer server) {
+		return SchedulerManagerSystem.resolveAdaptiveDelayTicks(
+			server,
+			FARMING_PROCESS_SCHEDULER_OWNER_ID,
+			FARMING_SCHEDULER_MIN_INTERVAL_TICKS,
+			FARMING_SCHEDULER_MAX_INTERVAL_TICKS
+		);
 	}
 
 	private static void requestFarmingProcessTask(MinecraftServer server, long delayTicks) {
@@ -2854,3 +2872,4 @@ public final class MadokuFarming {
 		}
 	}
 }
+

@@ -148,3 +148,4 @@ public abstract class LootTableFarmingMixin {
 		return null;
 	}
 }
+
