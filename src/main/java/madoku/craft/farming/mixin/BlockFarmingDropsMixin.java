@@ -1,12 +1,12 @@
 package madoku.craft.farming.mixin;
 
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import madoku.craft.api.data.MadokuChunkDataManager;
 import madoku.craft.farming.system.MadokuFarming;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
@@ -89,29 +89,24 @@ public abstract class BlockFarmingDropsMixin {
 		BlockPos pos,
 		CallbackInfo ci
 	) {
+		// Player-placed crop blocks must retain vanilla block drops. The placed
+		// marker is available regardless of whether Madoku Farming is enabled.
+		if (MadokuChunkDataManager.isPlayerPlacedBlock(level, pos)) {
+			return;
+		}
 		if (!MadokuFarming.isEnabled() || !MadokuFarming.isManagedHarvestState(level, pos, state)) {
 			return;
 		}
 
 		MadokuFarming.prepareCropHarvest(level, pos, state);
 		RandomSource random = level == null ? RandomSource.create() : level.getRandom();
-		int count = MadokuFarming.calculateCropHarvestCount(level, pos, state, random);
-		if (count <= 0) {
+		ObjectArrayList<ItemStack> drops = new ObjectArrayList<>(MadokuFarming.calculateCropHarvestDrops(level, pos, state, random));
+		if (drops.isEmpty()) {
+			if (MadokuFarming.hasCropHarvestLootTable(level, pos, state)) {
+				MadokuFarming.completeCropHarvest(level, pos, state);
+				ci.cancel();
+			}
 			return;
-		}
-
-		Item harvestItem = MadokuFarming.getCropHarvestItem(level, pos, state);
-		if (harvestItem == null) {
-			return;
-		}
-
-		MadokuFarming.emitPendingHarvestUsedDebug(level, pos, state, "block_drop");
-		Item secondaryHarvestItem = MadokuFarming.getCropSecondaryHarvestItem(level, pos, state);
-		int secondaryCount = MadokuFarming.calculateCropSecondaryHarvestCount(level, pos, state, random);
-		ObjectArrayList<ItemStack> drops = new ObjectArrayList<>(secondaryHarvestItem != null && secondaryCount > 0 ? 2 : 1);
-		drops.add(new ItemStack(harvestItem, count));
-		if (secondaryHarvestItem != null && secondaryCount > 0) {
-			drops.add(new ItemStack(secondaryHarvestItem, secondaryCount));
 		}
 		for (ItemStack drop : drops) {
 			if (drop != null && !drop.isEmpty()) {
@@ -122,4 +117,3 @@ public abstract class BlockFarmingDropsMixin {
 		ci.cancel();
 	}
 }
-

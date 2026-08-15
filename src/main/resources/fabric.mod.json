@@ -20,11 +20,7 @@
 		]
 	},
 	"mixins": [
-		"madoku-craft-farming.mixins.json",
-		{
-			"config": "madoku-craft-farming.client.mixins.json",
-			"environment": "client"
-		}
+		"madoku-craft-farming.mixins.json"
 	],
 	"depends": {
 		"fabricloader": ">=0.18.5",

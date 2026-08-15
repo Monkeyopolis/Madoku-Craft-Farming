@@ -18,8 +18,9 @@ public class Madokucraftfarming implements ModInitializer {
 			MadokuFarming.onServerStarted(server);
 		});
 
+		ServerLifecycleEvents.SERVER_STOPPING.register(MadokuFarming::savePersistedData);
+
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
-			MadokuFarming.savePersistedData(server);
 			MadokuFarming.reset();
 		});
 

@@ -1,10 +1,10 @@
 package madoku.craft.farming.mixin;
 
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import madoku.craft.api.data.MadokuChunkDataManager;
 import madoku.craft.farming.system.MadokuFarming;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.phys.Vec3;
@@ -37,30 +37,23 @@ public abstract class LootTableFarmingMixin {
 		ServerLevel level = lootContext.getLevel();
 		BlockState state = resolveBlockStateParameter(lootContext);
 		BlockPos pos = resolveBlockPosParameter(lootContext);
+		if (MadokuChunkDataManager.isPlayerPlacedBlock(level, pos)) {
+			return;
+		}
 		if (!MadokuFarming.isManagedCrop(level, pos, state) || !MadokuFarming.isCropHarvestReady(level, pos, state)) {
 			return;
 		}
 
 		MadokuFarming.prepareCropHarvest(level, pos, state);
 		RandomSource random = lootContext.getRandom();
-		int count = MadokuFarming.calculateCropHarvestCount(level, pos, state, random);
-		if (count <= 0) {
+		ObjectArrayList<ItemStack> drops = new ObjectArrayList<>(MadokuFarming.calculateCropHarvestDrops(level, pos, state, random));
+		if (drops.isEmpty()) {
+			if (MadokuFarming.hasCropHarvestLootTable(level, pos, state)) {
+				MadokuFarming.completeCropHarvest(level, pos, state);
+				cir.setReturnValue(drops);
+			}
 			return;
 		}
-
-		Item harvestItem = MadokuFarming.getCropHarvestItem(level, pos, state);
-		if (harvestItem == null) {
-			return;
-		}
-
-		Item secondaryHarvestItem = MadokuFarming.getCropSecondaryHarvestItem(level, pos, state);
-		int secondaryCount = MadokuFarming.calculateCropSecondaryHarvestCount(level, pos, state, random);
-		ObjectArrayList<ItemStack> drops = new ObjectArrayList<>(secondaryHarvestItem != null && secondaryCount > 0 ? 2 : 1);
-		drops.add(new ItemStack(harvestItem, count));
-		if (secondaryHarvestItem != null && secondaryCount > 0) {
-			drops.add(new ItemStack(secondaryHarvestItem, secondaryCount));
-		}
-		MadokuFarming.emitPendingHarvestUsedDebug(level, pos, state, "loot_table");
 		MadokuFarming.completeCropHarvest(level, pos, state);
 		cir.setReturnValue(drops);
 	}
@@ -148,4 +141,3 @@ public abstract class LootTableFarmingMixin {
 		return null;
 	}
 }
-

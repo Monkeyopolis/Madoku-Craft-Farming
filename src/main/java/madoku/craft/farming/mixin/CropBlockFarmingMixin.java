@@ -25,8 +25,7 @@ public abstract class CropBlockFarmingMixin {
 			return;
 		}
 
-		MadokuFarming.trackCrop(level, pos, state);
-		if (MadokuFarming.isManagedPlot(level, pos.below())) {
+		if (MadokuFarming.handleCropRandomTick(level, pos, state, random)) {
 			ci.cancel();
 		}
 	}

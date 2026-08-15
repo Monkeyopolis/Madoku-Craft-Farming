@@ -6,6 +6,7 @@ import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.FarmlandBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import org.spongepowered.asm.mixin.Mixin;
@@ -16,6 +17,24 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(FarmlandBlock.class)
 public abstract class FarmlandBlockFarmingMixin {
+	@Inject(method = "randomTick", at = @At("HEAD"), cancellable = true)
+	private void madokuCraft$applySeasonalMoisture(
+		BlockState state,
+		ServerLevel level,
+		BlockPos pos,
+		RandomSource random,
+		CallbackInfo ci
+	) {
+		if (!MadokuFarming.isEnabled()) {
+			return;
+		}
+
+		MadokuFarming.handleFarmlandRandomTick(level, pos);
+		if (MadokuFarming.applySeasonalMoisture(level, pos, state)) {
+			ci.cancel();
+		}
+	}
+
 	@Inject(method = "turnToDirt", at = @At("HEAD"), cancellable = true)
 	private static void madokuCraft$preventManagedFarmlandDirt(
 		Entity entity,
@@ -43,6 +62,10 @@ public abstract class FarmlandBlockFarmingMixin {
 	private static boolean shouldHoldManagedFarmland(BlockGetter level, BlockPos pos) {
 		if (!MadokuFarming.isEnabled() || level == null || pos == null) {
 			return false;
+		}
+
+		if (level instanceof ServerLevel serverLevel && MadokuFarming.shouldMaintainSeasonalMoisture(serverLevel, pos)) {
+			return true;
 		}
 
 		BlockPos abovePos = pos.above();
