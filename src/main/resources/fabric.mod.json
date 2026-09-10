@@ -1,32 +1,22 @@
 {
-	"schemaVersion": 1,
-	"id": "madoku-craft-farming",
-	"version": "${version}",
-	"name": "madoku-craft-farming",
-	"description": "A configurable farming overhaul system.",
-	"authors": [
-		"Monkeyopolis!"
-	],
-	"contact": {
-		"homepage": "https://fabricmc.net/",
-		"sources": "https://github.com/FabricMC/fabric-example-mod"
-	},
-	"license": "CC0-1.0",
-	"icon": "assets/madoku-craft-farming/icon.png",
-	"environment": "*",
-	"entrypoints": {
-		"main": [
-			"madoku.craft.farming.Madokucraftfarming"
-		]
-	},
-	"mixins": [
-		"madoku-craft-farming.mixins.json"
-	],
-	"depends": {
-		"fabricloader": ">=0.18.5",
-		"minecraft": "~${minecraft_version}",
-		"java": ">=25",
-		"fabric-api": "*",
-		"madoku-craft-api": "${madoku_craft_api_mod_version}"
-	}
+  "schemaVersion": 1,
+  "id": "madoku-craft-farming",
+  "version": "${version}",
+  "name": "Madoku Craft: Farming",
+  "description": "A configurable farming overhaul mod.",
+  "authors": ["Monkeyopolis"],
+  "license": "CC0-1.0",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["madoku.craft.java.farming.MadokuFarmingInitializer"],
+    "client": ["madoku.craft.java.farming.MadokuFarmingClientInitializer"]
+  },
+  "mixins": ["madoku-craft-farming.mixins.json"],
+  "depends": {
+    "fabricloader": "${loader_version}",
+    "minecraft": "~${minecraft_version}",
+    "java": ">=25",
+    "fabric-api": "${fabric_api_version}",
+    "madoku-craft-core": "*"
+  }
 }

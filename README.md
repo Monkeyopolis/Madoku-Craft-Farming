@@ -1,27 +1,27 @@
-## Madoku Craft: Farming
+## Overview:
 
-Madoku Craft: Farming is a configurable farming system.
-It adjusts crops to grow based on time instead of randomly and modifies the yield for crops.
-Most of these features are customizable in the config files.
+Madoku Craft: Farming adjusts crops to grow based on time instead of randomly.
+It modifies the yield for crops and allows farmland to be fertilized.
+These features are customizable in the config files.
 
-## Dependencies
+## Dependencies:
 
 - Fabric API
-- Madoku Craft API
+- Madoku Craft: Core
 
-## Features
+## Features:
 
-Crop Growth:
+**Crop Growth:**
 
 - All Crops grow based on in-game time, temperature, and humidity.
 - Crops grow faster when it rains.
 
-Fertilizer:
+**Fertilizer:**
 
 - Placing bonemeal on farmland fertlizes the plot.
 - Fertilized farmland allows crops to grow faster and increases their yield.
 
-Adjusted Crops:
+**Adjusted Crops:**
 
 - Pumpkins and melons no longer grow adjacent to their stem.
 - Since pumpkins and melons replace their Ssem, their yield were adjusted accordingly.
