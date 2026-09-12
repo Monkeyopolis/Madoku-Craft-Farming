@@ -1,4 +1,11 @@
 pluginManagement {
+	resolutionStrategy {
+		eachPlugin {
+			if (requested.id.id == 'net.fabricmc.fabric-loom-remap') {
+				useModule('net.fabricmc:fabric-loom:1.17.20')
+			}
+		}
+	}
 	repositories {
 		maven {
 			name = 'Fabric'
@@ -7,4 +14,16 @@ pluginManagement {
 		mavenCentral()
 		gradlePluginPortal()
 	}
+}
+
+rootProject.name = "madoku-craft-farming"
+
+gradle.startParameter.projectCacheDir = new File(
+	System.getProperty("user.home"),
+	".gradle/m/2111/${rootProject.name}"
+)
+
+
+if (gradle.parent == null) {
+	includeBuild("../core")
 }

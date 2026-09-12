@@ -11,11 +11,12 @@ base {
 }
 
 repositories {
+	mavenCentral()
+	mavenLocal()
 	maven {
+		name = "CurseMaven"
 		url = "https://www.cursemaven.com"
-		content {
-			includeGroup "curse.maven"
-		}
+		content { includeGroup "curse.maven" }
 	}
 }
 
@@ -30,44 +31,49 @@ loom {
 	}
 }
 
+sourceSets {
+	main {
+		java {
+			srcDir "src/main/server"
+		}
+	}
+	client {
+		java {
+			srcDir "src/main/client"
+		}
+	}
+}
+
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	mappings loom.officialMojangMappings()
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-	modImplementation "curse.maven:madoku-craft-api-1419561:${project.madoku_craft_api_version}"
+	modImplementation "madoku.craft:madoku-craft-core:${project.core_version}"
 }
 
 processResources {
 	inputs.property "version", project.version
 	inputs.property "minecraft_version", project.minecraft_version
-	inputs.property "madoku_craft_api_mod_version", project.madoku_craft_api_mod_version
-
+	inputs.property "loader_version", project.loader_version
+	inputs.property "fabric_api_version", project.fabric_api_version
 	filesMatching("fabric.mod.json") {
-		expand(
-			"version": inputs.properties.version,
-			"minecraft_version": inputs.properties.minecraft_version,
-			"madoku_craft_api_mod_version": inputs.properties.madoku_craft_api_mod_version
-		)
+		expand "version": project.version,
+			"minecraft_version": project.minecraft_version,
+			"loader_version": project.loader_version,
+			"fabric_api_version": project.fabric_api_version
 	}
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 21
+	options.release = 21
 }
 
 java {
 	withSourcesJar()
 
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
-}
-
-jar {
-	inputs.property "archivesName", project.base.archivesName
-
-	from("LICENSE") {
-		rename { "${it}_${inputs.properties.archivesName}"}
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
 	}
 }
 
@@ -77,8 +83,5 @@ publishing {
 			artifactId = project.archives_base_name
 			from components.java
 		}
-	}
-
-	repositories {
 	}
 }

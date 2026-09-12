@@ -1,21 +1,13 @@
 {
-	"required": true,
-	"package": "madoku.craft.farming.mixin",
-	"compatibilityLevel": "JAVA_21",
-	"mixins": [
-		"BlockFarmingDropsMixin",
-		"CropBlockFarmingMixin",
-		"FarmlandBlockFarmingMixin",
-		"ItemComponentsAccessor",
-		"ItemStackFarmingMixin",
-		"LootTableFarmingMixin",
-		"ServerPlayerGameModeFarmingMixin",
-		"StemBlockFarmingMixin"
-	],
-	"injectors": {
-		"defaultRequire": 1
-	},
-	"overwrites": {
-		"requireAnnotations": true
-	}
+  "required": true,
+  "package": "madoku.craft.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "farming.ComposterBlockMixin",
+    "farming.CropBlockFarmingMixin",
+    "farming.FarmlandBlockFarmingMixin",
+    "farming.ItemStackFarmingMixin",
+    "farming.StemBlockFarmingMixin"
+  ],
+  "injectors": { "defaultRequire": 1 }
 }
