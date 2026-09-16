@@ -18,10 +18,6 @@ pluginManagement {
 
 rootProject.name = "madoku-craft-farming"
 
-gradle.startParameter.projectCacheDir = new File(
-	System.getProperty("user.home"),
-	".gradle/m/2111/${rootProject.name}"
-)
 
 
 if (gradle.parent == null) {
