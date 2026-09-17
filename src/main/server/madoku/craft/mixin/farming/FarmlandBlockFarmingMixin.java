@@ -35,8 +35,12 @@ public abstract class FarmlandBlockFarmingMixin {
 		}
 	}
 
-	@Inject(method = "turnToDirt", at = @At("HEAD"), cancellable = true)
-	private static void madokuCraft$preventManagedFarmlandDirt(
+	@Inject(
+		method = "turnToBaseBlock(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;)V",
+		at = @At("HEAD"),
+		cancellable = true
+	)
+	private void madokuCraft$preventManagedFarmlandDirt(
 		Entity entity,
 		BlockState state,
 		Level level,
