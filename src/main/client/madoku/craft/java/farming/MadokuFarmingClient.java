@@ -19,5 +19,6 @@ public final class MadokuFarmingClient {
 			FarmingAPIManager.applyCropItemMetadata();
 		});
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> metadataApplied = false);
+		FarmingPlotIndicatorClient.initialize();
 	}
 }

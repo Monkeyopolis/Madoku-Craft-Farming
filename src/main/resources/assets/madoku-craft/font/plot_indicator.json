@@ -1,0 +1,18 @@
+{
+  "providers": [
+    {
+      "type": "bitmap",
+      "file": "madoku-craft:icons/growth-time.png",
+      "ascent": 7,
+      "height": 8,
+      "chars": ["\uE010"]
+    },
+    {
+      "type": "bitmap",
+      "file": "madoku-craft:icons/growth-speed.png",
+      "ascent": 7,
+      "height": 8,
+      "chars": ["\uE011"]
+    }
+  ]
+}

@@ -9,5 +9,8 @@
     "farming.ItemStackFarmingMixin",
     "farming.StemBlockFarmingMixin"
   ],
+  "client": [
+    "farming.LevelRendererMixin"
+  ],
   "injectors": { "defaultRequire": 1 }
 }

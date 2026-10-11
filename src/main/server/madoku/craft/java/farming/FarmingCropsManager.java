@@ -9,6 +9,9 @@ import madoku.craft.java.core.data.DataSystemsAPIManager;
 import madoku.craft.java.core.data.ChunkDataAPIManager;
 import madoku.craft.java.core.data.WorldChunkDataAPIManager;
 import madoku.craft.java.core.data.WorldChunkDataKey;
+import madoku.craft.java.core.chunk.ActiveChunkTickAPIManager;
+import madoku.craft.java.core.chunk.ActiveChunkTickEvent;
+import madoku.craft.java.core.chunk.ActiveChunkTickListener;
 import madoku.craft.java.core.chunk.ChunkAPIManager;
 import madoku.craft.java.core.json.JSONFormatAPIManager;
 import madoku.craft.java.core.json.JSONAPIManager;
@@ -50,6 +53,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -58,6 +62,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -91,6 +96,10 @@ public final class FarmingCropsManager {
 	private static final int FERTILIZER_PARTICLE_MAX_COUNT = 8;
 	private static final double FERTILIZER_PARTICLE_SPREAD = 0.12d;
 	private static final double FERTILIZER_PARTICLE_Y_OFFSET = 0.1d;
+	private static final int MAX_CROP_OPERATIONS_PER_HEARTBEAT = 4;
+	private static final long ACTIVE_CROP_UPDATE_INTERVAL_TICKS = 1L;
+	private static final long ZERO_SPEED_RECHECK_INTERVAL_TICKS = 20L;
+	private static final double CROP_DUE_EPSILON = 1.0e-6d;
 
 	private static volatile Settings settings = Settings.defaults();
 	private static volatile boolean dirty = false;
@@ -108,9 +117,13 @@ public final class FarmingCropsManager {
 
 	private static final Map<String, PlotState> plotsByKey = new HashMap<>();
 	private static final Map<String, CropState> cropsByKey = new HashMap<>();
+	private static final Map<String, Set<String>> plotKeysByChunk = new HashMap<>();
 	private static final Map<String, Set<String>> cropKeysByChunk = new HashMap<>();
 	private static final Map<String, PendingHarvestRule> pendingHarvestRulesByKey = new HashMap<>();
 	private static final Set<String> LOADED_CHUNK_KEYS = new LinkedHashSet<>();
+	private static final Map<String, PriorityQueue<CropDueEntry>> cropDueQueuesByChunk = new HashMap<>();
+	private static final Map<String, Map<String, Long>> cropDueVersionsByChunk = new HashMap<>();
+	private static final ActiveChunkTickListener ACTIVE_CHUNK_TICK_LISTENER = FarmingCropsManager::onActiveChunkTick;
 	private static final ChunkAPIManager.ChunkLifecycleListener CHUNK_LISTENER = new ChunkAPIManager.ChunkLifecycleListener() {
 		@Override public void onChunkLoaded(ServerLevel level, int chunkX, int chunkZ) {
 			loadChunkData(level, chunkX, chunkZ);
@@ -119,7 +132,8 @@ public final class FarmingCropsManager {
 
 		@Override public void onChunkUnloaded(ServerLevel level, int chunkX, int chunkZ) {
 			saveChunkData(level, chunkX, chunkZ);
-			evictChunkData(level, chunkX, chunkZ);
+			clearCropDueSchedule(cropChunkKey(level, chunkX, chunkZ));
+			markChunkUnloaded(level, chunkX, chunkZ);
 		}
 	};
 
@@ -129,6 +143,7 @@ public final class FarmingCropsManager {
 	public static void initialize() {
 		DataSystemsAPIManager.registerSystem(DATA_SYSTEM_ID);
 		ChunkAPIManager.registerChunkLifecycleListener(CHUNK_LISTENER);
+		ActiveChunkTickAPIManager.registerListener(ACTIVE_CHUNK_TICK_LISTENER);
 		loadStaticConfig();
 		loadCropConfigs();
 		SyncConfigAPIManager.register(
@@ -146,11 +161,15 @@ public final class FarmingCropsManager {
 	}
 
 	public static void reset() {
+		ActiveChunkTickAPIManager.unregisterListener(ACTIVE_CHUNK_TICK_LISTENER);
 		plotsByKey.clear();
 		cropsByKey.clear();
+		plotKeysByChunk.clear();
 		cropKeysByChunk.clear();
 		pendingHarvestRulesByKey.clear();
 		LOADED_CHUNK_KEYS.clear();
+		cropDueQueuesByChunk.clear();
+		cropDueVersionsByChunk.clear();
 		dirty = false;
 		clientSynchronized = false;
 		savedClientSettings = null;
@@ -163,6 +182,7 @@ public final class FarmingCropsManager {
 			return;
 		}
 		DataSystemsAPIManager.registerSystem(DATA_SYSTEM_ID);
+		ActiveChunkTickAPIManager.registerListener(ACTIVE_CHUNK_TICK_LISTENER);
 		applyCropItemMetadata();
 		for (ServerLevel level : server.getAllLevels()) {
 			level.getChunkSource().chunkMap.forEachReadyToSendChunk((LevelChunk chunk) -> {
@@ -183,9 +203,12 @@ public final class FarmingCropsManager {
 		loadCropConfigs();
 		plotsByKey.clear();
 		cropsByKey.clear();
+		plotKeysByChunk.clear();
 		cropKeysByChunk.clear();
 		pendingHarvestRulesByKey.clear();
 		LOADED_CHUNK_KEYS.clear();
+		cropDueQueuesByChunk.clear();
+		cropDueVersionsByChunk.clear();
 		dirty = false;
 	}
 
@@ -298,6 +321,7 @@ public final class FarmingCropsManager {
 		crop.lastProcessedAbsoluteDayTime = Math.max(crop.lastProcessedAbsoluteDayTime, resolveAbsoluteDayTime(world));
 		dirty = true;
 		updateCropBlockAge(world, cropPos, world.getBlockState(cropPos), rule, crop);
+		scheduleCropDue(world, crop);
 
 		return true;
 	}
@@ -345,6 +369,145 @@ public final class FarmingCropsManager {
 	public static boolean isManagedPlot(ServerLevel world, BlockPos soilPos) {
 		PlotState plot = findPlot(world, soilPos);
 		return plot != null && (plot.fertilized || plot.hasCrop());
+	}
+
+	static boolean isPlotGrowthComplete(ServerLevel world, long soilPos) {
+		if (!settings.enabled || world == null) {
+			return false;
+		}
+
+		PlotState plot = findPlot(world, BlockPos.of(soilPos));
+		if (plot == null || !plot.hasCrop()) {
+			return false;
+		}
+		CropState crop = cropsByKey.get(plot.levelId + "|" + plot.cropPos);
+		if (crop == null) {
+			return false;
+		}
+		CropRule rule = resolveCropRuleByPlantingItemId(crop.cropId);
+		if (rule == null) {
+			return false;
+		}
+
+		BlockPos cropPos = BlockPos.of(crop.cropPos);
+		BlockState cropState = world.getBlockState(cropPos);
+		if (isCropMatureBlock(cropState, rule) || isMaxAge(cropState)) {
+			return true;
+		}
+
+		double requiredGrowthTicks = Math.max(1.0d, crop.requiredGrowthTicks);
+		double progressGrowthTicks = Math.max(
+			0.0d,
+			Math.min(requiredGrowthTicks, crop.progressGrowthTicks)
+		);
+		long currentAbsoluteDayTime = resolveAbsoluteDayTime(world);
+		long previousAbsoluteDayTime = normalizePreviousAbsoluteTick(
+			crop.lastProcessedAbsoluteDayTime,
+			currentAbsoluteDayTime
+		);
+		long elapsedTicks = Math.max(0L, currentAbsoluteDayTime - previousAbsoluteDayTime);
+		double speedMultiplier = resolveGrowthSpeedMultiplier(rule, world, cropPos);
+		return progressGrowthTicks + elapsedTicks * speedMultiplier
+			+ CROP_DUE_EPSILON >= requiredGrowthTicks;
+	}
+
+	/**
+	 * Returns server-authoritative indicator values from the chunk-indexed plot
+	 * registry. This checks tracked plots only; it never searches nearby blocks.
+	 * The client remains responsible for final distance and visibility culling.
+	 */
+	static List<PlotIndicatorState> getPlotIndicatorStates(ServerLevel world, BlockPos center, int radius) {
+		if (!settings.enabled || world == null || center == null || radius < 0) {
+			return List.of();
+		}
+
+		String currentLevelId = levelId(world);
+		long currentAbsoluteDayTime = resolveAbsoluteDayTime(world);
+		int radiusSquared = radius * radius;
+		int minChunkX = (center.getX() - radius) >> 4;
+		int maxChunkX = (center.getX() + radius) >> 4;
+		int minChunkZ = (center.getZ() - radius) >> 4;
+		int maxChunkZ = (center.getZ() + radius) >> 4;
+		List<PlotIndicatorState> indicators = new ArrayList<>();
+
+		for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+			for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+				if (!isRuntimeChunkLoaded(world, chunkX, chunkZ)) {
+					continue;
+				}
+				Set<String> plotKeys = plotKeysByChunk.get(plotChunkKey(world, chunkX, chunkZ));
+				if (plotKeys == null || plotKeys.isEmpty()) {
+					continue;
+				}
+
+				for (String plotKey : plotKeys) {
+					PlotState plot = plotsByKey.get(plotKey);
+					if (plot == null || !currentLevelId.equals(plot.levelId) || !plot.hasCrop()) {
+						continue;
+					}
+					BlockPos soilPos = BlockPos.of(plot.soilPos);
+					int dx = soilPos.getX() - center.getX();
+					int dy = soilPos.getY() - center.getY();
+					int dz = soilPos.getZ() - center.getZ();
+					if (dx * dx + dy * dy + dz * dz > radiusSquared) {
+						continue;
+					}
+
+					CropState crop = cropsByKey.get(plot.levelId + "|" + plot.cropPos);
+					if (crop == null) {
+						continue;
+					}
+
+					BlockPos cropPos = BlockPos.of(plot.cropPos);
+					CropRule rule = resolveCropRuleByPlantingItemId(crop.cropId);
+					BlockState cropState = world.getBlockState(cropPos);
+					if (rule == null
+						|| (!isCropBlock(cropState, rule) && !isCropMatureBlock(cropState, rule))
+						|| !isFarmland(world.getBlockState(soilPos))) {
+						continue;
+					}
+
+					double requiredGrowthTicks = Math.max(1.0d, crop.requiredGrowthTicks);
+					double progressGrowthTicks = Math.max(0.0d,
+						Math.min(requiredGrowthTicks, crop.progressGrowthTicks));
+					double growthSpeedMultiplier = resolveGrowthSpeedMultiplier(rule, world, cropPos);
+					long previousAbsoluteDayTime = normalizePreviousAbsoluteTick(
+						crop.lastProcessedAbsoluteDayTime,
+						currentAbsoluteDayTime
+					);
+					long elapsedTicks = Math.max(0L, currentAbsoluteDayTime - previousAbsoluteDayTime);
+					progressGrowthTicks = Math.min(
+						requiredGrowthTicks,
+						progressGrowthTicks + (elapsedTicks * growthSpeedMultiplier)
+					);
+					double remainingGrowthTicks = Math.max(0.0d, requiredGrowthTicks - progressGrowthTicks);
+					if (remainingGrowthTicks <= CROP_DUE_EPSILON
+						|| isCropMatureBlock(cropState, rule)
+						|| isMaxAge(cropState)) {
+						continue;
+					}
+					indicators.add(new PlotIndicatorState(
+						plot.soilPos,
+						plot.cropPos,
+						remainingGrowthTicks,
+						growthSpeedMultiplier
+					));
+				}
+			}
+		}
+		return indicators;
+	}
+
+	public record PlotIndicatorState(
+		long soilPos,
+		long cropPos,
+		double remainingGrowthTicks,
+		double growthSpeedMultiplier
+	) {
+		public PlotIndicatorState {
+			remainingGrowthTicks = Math.max(0.0d, remainingGrowthTicks);
+			growthSpeedMultiplier = Math.max(0.0d, growthSpeedMultiplier);
+		}
 	}
 
 	public static void fertilizeSoil(ServerLevel world, BlockPos soilPos) {
@@ -487,6 +650,7 @@ public final class FarmingCropsManager {
 		double requiredGrowthTicks = resolveCropRequiredGrowthTicks(rule);
 		CropState existing = cropsByKey.get(cropKey);
 		boolean cropTypeChanged = existing != null && !rule.plantingItemId().equals(existing.cropId);
+		boolean scheduleDue = existing == null || cropTypeChanged;
 		double progressBasisTicks = (existing != null && !cropTypeChanged)
 			? Math.max(1.0d, existing.requiredGrowthTicks)
 			: requiredGrowthTicks;
@@ -505,6 +669,7 @@ public final class FarmingCropsManager {
 				Math.max(0.0d, progressFromState),
 				nowAbsoluteDayTime
 			);
+			putCropState(cropKey, existing);
 		} else {
 			existing.soilPos = soilPos.asLong();
 			if (cropTypeChanged) {
@@ -521,6 +686,7 @@ public final class FarmingCropsManager {
 					&& !isMaxAge(cropState)
 					&& progressFromState + Math.max(1.0d, oneAgeStepTicks) < cappedExistingProgress;
 				if (visiblyRegressed) {
+					scheduleDue = true;
 					// Replanting at the same position can reuse the previous crop key.
 					// If the observed age dropped, reset tracked growth to the observed state.
 					existing.requiredGrowthTicks = Math.max(1.0d, requiredGrowthTicks);
@@ -536,18 +702,25 @@ public final class FarmingCropsManager {
 			existing.progressGrowthTicks = existing.requiredGrowthTicks;
 		}
 
-		putCropState(cropKey, existing);
+		if (scheduleDue) {
+			scheduleCropDue(world, existing);
+		}
 		plot.cropPos = cropPos.asLong();
 		plot.cropId = rule.plantingItemId();
 		dirty = true;
 	}
 
 	/**
-	 * Updates a managed crop when Minecraft gives its block a random tick.
-	 * Random ticks are the trigger; the persisted elapsed-time value preserves
-	 * the configured growth duration instead of making growth depend on tick count.
+	 * Prevents vanilla random ticks from bypassing the active-chunk growth
+	 * scheduler. A random tick may discover a crop that was placed outside the
+	 * normal planting path, but it never advances the crop timer.
 	 */
-	public static boolean handleCropRandomTick(ServerLevel world, BlockPos cropPos, BlockState cropState, RandomSource random) {
+	public static boolean handleCropRandomTick(
+		ServerLevel world,
+		BlockPos cropPos,
+		BlockState cropState,
+		RandomSource ignoredRandom
+	) {
 		if (!settings.enabled || world == null || cropPos == null || cropState == null) {
 			return false;
 		}
@@ -558,13 +731,13 @@ public final class FarmingCropsManager {
 			return false;
 		}
 
-		trackCrop(world, cropPos, cropState);
 		CropState crop = findCrop(world, cropPos);
 		if (crop == null) {
-			return false;
+			trackCrop(world, cropPos, cropState);
 		}
 
-		applyElapsedCropProgress(world, cropPos, cropState, rule, crop, resolveAbsoluteDayTime(world));
+		// Managed crops are advanced only by onActiveChunkTick. Cancelling here
+		// prevents vanilla's random-growth formula from competing with that timer.
 		return true;
 	}
 
@@ -597,9 +770,14 @@ public final class FarmingCropsManager {
 			}
 
 			applyElapsedCropProgress(world, cropPos, cropState, rule, crop, currentAbsoluteDayTime);
+			scheduleCropDue(world, crop);
 		}
 
 		for (String staleKey : staleKeys) {
+			CropState staleCrop = cropsByKey.get(staleKey);
+			if (staleCrop != null) {
+				FarmingPlotIndicatorManager.invalidatePlot(world, staleCrop.soilPos);
+			}
 			if (removeCropStateByKey(staleKey) != null) {
 				dirty = true;
 			} else {
@@ -607,26 +785,214 @@ public final class FarmingCropsManager {
 				keys.remove(staleKey);
 			}
 		}
+		rebuildCropDueSchedule(world, chunkX, chunkZ);
 	}
+
+	/**
+	 * Advances a bounded number of crops from an active chunk on every heartbeat.
+	 * Positive-speed crops are scheduled for the next heartbeat so their block
+	 * age can advance continuously; zero-speed crops are rechecked less often.
+	 */
+	private static void onActiveChunkTick(ActiveChunkTickEvent event) {
+		if (event == null || !settings.enabled) {
+			return;
+		}
+
+		ServerLevel world = event.level();
+		LevelChunk chunk = event.chunk();
+		if (world == null || chunk == null) {
+			return;
+		}
+
+		int chunkX = chunk.getPos().x();
+		int chunkZ = chunk.getPos().z();
+		String chunkKey = cropChunkKey(world, chunkX, chunkZ);
+		Set<String> cropKeys = cropKeysByChunk.get(chunkKey);
+		PriorityQueue<CropDueEntry> queue = cropDueQueuesByChunk.get(chunkKey);
+		if (cropKeys == null || cropKeys.isEmpty()) {
+			clearCropDueSchedule(chunkKey);
+			return;
+		}
+
+		if (queue == null || (queue.isEmpty() && hasPendingCropGrowth(cropKeys))) {
+			rebuildCropDueSchedule(world, chunkX, chunkZ);
+			queue = cropDueQueuesByChunk.get(chunkKey);
+			if (queue == null) {
+				return;
+			}
+		}
+
+		long currentAbsoluteDayTime = resolveAbsoluteDayTime(world);
+		pruneCropDueQueue(chunkKey, queue);
+		int operations = 0;
+		while (operations < MAX_CROP_OPERATIONS_PER_HEARTBEAT) {
+			CropDueEntry entry = queue.peek();
+			if (entry == null) {
+				break;
+			}
+			if (!isCurrentCropDueEntry(chunkKey, entry)) {
+				queue.poll();
+				continue;
+			}
+			if (entry.nextDue() > currentAbsoluteDayTime + CROP_DUE_EPSILON) {
+				break;
+			}
+
+			queue.poll();
+			CropState crop = cropsByKey.get(entry.cropKey());
+			if (crop == null) {
+				continue;
+			}
+
+			BlockPos cropPos = BlockPos.of(crop.cropPos);
+			BlockState cropState = world.getBlockState(cropPos);
+			BlockState soilState = world.getBlockState(cropPos.below());
+			CropRule rule = resolveCropRuleByPlantingItemId(crop.cropId);
+			if (rule == null || !isCropBlock(cropState, rule) || !isFarmland(soilState)) {
+				FarmingPlotIndicatorManager.invalidatePlot(world, crop.soilPos);
+				if (removeCropStateByKey(crop.key()) != null) {
+					dirty = true;
+				}
+				continue;
+			}
+
+			applyElapsedCropProgress(world, cropPos, cropState, rule, crop, currentAbsoluteDayTime);
+			operations++;
+			scheduleCropDue(world, crop);
+		}
+
+		pruneCropDueQueue(chunkKey, queue);
+		if (queue.size() > cropKeys.size() * 2 + 16) {
+			rebuildCropDueSchedule(world, chunkX, chunkZ);
+		}
+	}
+
+	private static boolean hasPendingCropGrowth(Set<String> cropKeys) {
+		if (cropKeys == null || cropKeys.isEmpty()) {
+			return false;
+		}
+		for (String cropKey : cropKeys) {
+			CropState crop = cropsByKey.get(cropKey);
+			if (crop != null && crop.progressGrowthTicks + CROP_DUE_EPSILON < Math.max(1.0d, crop.requiredGrowthTicks)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static void rebuildCropDueSchedule(ServerLevel world, int chunkX, int chunkZ) {
+		if (world == null) {
+			return;
+		}
+		String chunkKey = cropChunkKey(world, chunkX, chunkZ);
+		clearCropDueSchedule(chunkKey);
+		Set<String> cropKeys = cropKeysByChunk.get(chunkKey);
+		if (cropKeys == null || cropKeys.isEmpty()) {
+			return;
+		}
+		for (String cropKey : List.copyOf(cropKeys)) {
+			CropState crop = cropsByKey.get(cropKey);
+			if (crop != null) {
+				scheduleCropDue(world, crop);
+			}
+		}
+	}
+
+	private static void scheduleCropDue(ServerLevel world, CropState crop) {
+		if (world == null || crop == null) {
+			return;
+		}
+		String chunkKey = cropChunkKey(crop);
+		Map<String, Long> versions = cropDueVersionsByChunk.computeIfAbsent(chunkKey, ignored -> new HashMap<>());
+		long version = versions.getOrDefault(crop.key(), 0L) + 1L;
+		versions.put(crop.key(), version);
+		double nextDue = calculateCropNextDue(world, crop, resolveAbsoluteDayTime(world));
+		if (!Double.isFinite(nextDue)) {
+			return;
+		}
+		cropDueQueuesByChunk.computeIfAbsent(chunkKey, ignored -> new PriorityQueue<>(
+			Comparator.comparingDouble(CropDueEntry::nextDue).thenComparing(CropDueEntry::cropKey)
+		)).add(new CropDueEntry(crop.key(), nextDue, version));
+	}
+
+	private static double calculateCropNextDue(ServerLevel world, CropState crop, long currentAbsoluteDayTime) {
+		if (world == null || crop == null) {
+			return Double.POSITIVE_INFINITY;
+		}
+		double requiredTicks = Math.max(1.0d, crop.requiredGrowthTicks);
+		double progress = Math.max(0.0d, Math.min(requiredTicks, crop.progressGrowthTicks));
+		if (progress + CROP_DUE_EPSILON >= requiredTicks) {
+			return Double.POSITIVE_INFINITY;
+		}
+
+		CropRule rule = resolveCropRuleByPlantingItemId(crop.cropId);
+		if (rule == null) {
+			return Double.POSITIVE_INFINITY;
+		}
+		double speedMultiplier = resolveGrowthSpeedMultiplier(rule, world, BlockPos.of(crop.cropPos));
+		long baseline = Math.max(0L, crop.lastProcessedAbsoluteDayTime);
+		if (!(speedMultiplier > 0.0d)) {
+			return Math.max(currentAbsoluteDayTime, baseline) + ZERO_SPEED_RECHECK_INTERVAL_TICKS;
+		}
+		return Math.max(currentAbsoluteDayTime, baseline) + ACTIVE_CROP_UPDATE_INTERVAL_TICKS;
+	}
+
+	private static boolean isCurrentCropDueEntry(String chunkKey, CropDueEntry entry) {
+		Map<String, Long> versions = cropDueVersionsByChunk.get(chunkKey);
+		return versions != null && Long.valueOf(entry.version()).equals(versions.get(entry.cropKey()));
+	}
+
+	private static void pruneCropDueQueue(String chunkKey, PriorityQueue<CropDueEntry> queue) {
+		if (queue == null) {
+			return;
+		}
+		while (!queue.isEmpty()) {
+			CropDueEntry entry = queue.peek();
+			if (isCurrentCropDueEntry(chunkKey, entry) && cropsByKey.containsKey(entry.cropKey())) {
+				return;
+			}
+			queue.poll();
+		}
+	}
+
+	private static void clearCropDueSchedule(String chunkKey) {
+		if (chunkKey == null) {
+			return;
+		}
+		cropDueQueuesByChunk.remove(chunkKey);
+		cropDueVersionsByChunk.remove(chunkKey);
+	}
+
+	private record CropDueEntry(String cropKey, double nextDue, long version) { }
 
 	private static void loadChunkData(ServerLevel world, int chunkX, int chunkZ) {
 		if (world == null) return;
 		String chunkKey = cropChunkKey(world, chunkX, chunkZ);
 		LOADED_CHUNK_KEYS.add(chunkKey);
-		evictChunkRuntime(world, chunkX, chunkZ);
 		JsonObject source = WorldChunkDataAPIManager.getChunkSystemData(world, chunkX, chunkZ, DATA_SYSTEM_ID);
+		boolean hasPersistedFarmingData = source.has(FIELD_PLOTS) || source.has(FIELD_CROPS);
+		if (hasPersistedFarmingData) {
+			// A duplicate load callback can arrive after runtime state was already
+			// restored. Replace that chunk from durable data only when data exists;
+			// an empty attachment must not erase a valid in-memory state.
+			evictChunkRuntime(world, chunkX, chunkZ);
+		}
 		JsonElement plotsElement = source.get(FIELD_PLOTS);
 		if (plotsElement != null && plotsElement.isJsonArray()) {
 			for (JsonElement element : plotsElement.getAsJsonArray()) {
 				PlotState plot = PlotState.fromJson(element);
-				if (plot != null) putPlotState(plot.key(), plot);
+				if (plot != null) {
+					putPlotState(plot.key(), plot);
+				}
 			}
 		}
 		JsonElement cropsElement = source.get(FIELD_CROPS);
 		if (cropsElement != null && cropsElement.isJsonArray()) {
 			for (JsonElement element : cropsElement.getAsJsonArray()) {
 				CropState crop = CropState.fromJson(element);
-				if (crop != null) putCropState(crop.key(), crop);
+				if (crop != null) {
+					putCropState(crop.key(), crop);
+				}
 			}
 		}
 	}
@@ -649,40 +1015,65 @@ public final class FarmingCropsManager {
 		}
 	}
 
-	private static void evictChunkData(ServerLevel world, int chunkX, int chunkZ) {
-		evictChunkRuntime(world, chunkX, chunkZ);
+	private static void markChunkUnloaded(ServerLevel world, int chunkX, int chunkZ) {
 		LOADED_CHUNK_KEYS.remove(cropChunkKey(world, chunkX, chunkZ));
+	}
+
+	private static boolean isRuntimeChunkLoaded(ServerLevel world, int chunkX, int chunkZ) {
+		if (world == null) {
+			return false;
+		}
+		String chunkKey = cropChunkKey(world, chunkX, chunkZ);
+		if (LOADED_CHUNK_KEYS.contains(chunkKey)) {
+			return true;
+		}
+		if (!ChunkAPIManager.isChunkLoaded(world, chunkX, chunkZ)) {
+			return false;
+		}
+		LOADED_CHUNK_KEYS.add(chunkKey);
+		return true;
 	}
 
 	private static void evictChunkRuntime(ServerLevel world, int chunkX, int chunkZ) {
 		if (world == null) return;
 		String levelId = levelId(world);
 		String chunkKey = cropChunkKey(world, chunkX, chunkZ);
-		plotsByKey.entrySet().removeIf(entry -> entry.getValue() == null
-			|| !levelId.equals(entry.getValue().levelId)
-			|| BlockPos.getX(entry.getValue().soilPos) >> 4 != chunkX
-			|| BlockPos.getZ(entry.getValue().soilPos) >> 4 != chunkZ);
-		cropsByKey.entrySet().removeIf(entry -> entry.getValue() == null
-			|| !levelId.equals(entry.getValue().levelId)
-			|| BlockPos.getX(entry.getValue().cropPos) >> 4 != chunkX
-			|| BlockPos.getZ(entry.getValue().cropPos) >> 4 != chunkZ);
-		cropKeysByChunk.remove(chunkKey);
+		clearCropDueSchedule(chunkKey);
+		Set<String> plotKeys = plotKeysByChunk.get(chunkKey);
+		if (plotKeys != null) {
+			for (String plotKey : List.copyOf(plotKeys)) {
+				removePlotStateByKey(plotKey);
+			}
+		}
+		Set<String> cropKeys = cropKeysByChunk.get(chunkKey);
+		if (cropKeys != null) {
+			for (String cropKey : List.copyOf(cropKeys)) {
+				removeCropStateByKey(cropKey);
+			}
+		}
 		pendingHarvestRulesByKey.keySet().removeIf(key -> keyBelongsToChunk(key, levelId, chunkX, chunkZ));
 	}
 
 	private static JsonObject toChunkPersistedData(ServerLevel world, int chunkX, int chunkZ) {
 		JsonArray plots = new JsonArray();
-		for (PlotState plot : plotsByKey.values()) {
-			if (plot != null && levelId(world).equals(plot.levelId)
-				&& BlockPos.getX(plot.soilPos) >> 4 == chunkX && BlockPos.getZ(plot.soilPos) >> 4 == chunkZ) {
-				plots.add(plot.toJson());
+		String chunkKey = plotChunkKey(world, chunkX, chunkZ);
+		Set<String> plotKeys = plotKeysByChunk.get(chunkKey);
+		if (plotKeys != null) {
+			for (String plotKey : plotKeys) {
+				PlotState plot = plotsByKey.get(plotKey);
+				if (plot != null) {
+					plots.add(plot.toJson());
+				}
 			}
 		}
 		JsonArray crops = new JsonArray();
-		for (CropState crop : cropsByKey.values()) {
-			if (crop != null && levelId(world).equals(crop.levelId)
-				&& BlockPos.getX(crop.cropPos) >> 4 == chunkX && BlockPos.getZ(crop.cropPos) >> 4 == chunkZ) {
-				crops.add(crop.toJson());
+		Set<String> cropKeys = cropKeysByChunk.get(chunkKey);
+		if (cropKeys != null) {
+			for (String cropKey : cropKeys) {
+				CropState crop = cropsByKey.get(cropKey);
+				if (crop != null) {
+					crops.add(crop.toJson());
+				}
 			}
 		}
 		return JSONFormatAPIManager.object().put(FIELD_PLOTS, plots).put(FIELD_CROPS, crops).build();
@@ -722,6 +1113,8 @@ public final class FarmingCropsManager {
 		crop.requiredGrowthTicks = requiredTicks;
 		int ageLimit = Math.max(1, getCropAgeLimit(state));
 		boolean observedMature = isCropMatureBlock(state, rule) || isMaxAge(state);
+		boolean wasGrowthComplete = observedMature
+			|| crop.progressGrowthTicks + CROP_DUE_EPSILON >= requiredTicks;
 		int observedAge = isCropMatureBlock(state, rule) ? ageLimit : getCropAge(state);
 		double observedProgress = progressFromAge(observedAge, ageLimit) * requiredTicks;
 		double cappedTrackedProgress = Math.max(0.0d, Math.min(requiredTicks, crop.progressGrowthTicks));
@@ -730,17 +1123,7 @@ public final class FarmingCropsManager {
 			crop.progressGrowthTicks = Math.max(0.0d, Math.min(requiredTicks, observedProgress));
 		}
 
-		BlockPos soilPos = cropPos.below();
-		BlockState soilState = world.getBlockState(soilPos);
-		PlotState plot = findPlot(world, soilPos);
-		boolean fertilized = plot != null && plot.fertilized;
-		boolean raining = world.isRainingAt(cropPos);
-		boolean dryFarmland = isDryFarmland(soilState);
-		double speedMultiplier = 1.0d + resolveGrowingConditionsSpeedModifier(rule, world, cropPos);
-		if (fertilized) speedMultiplier += settings.fertilizedGrowthBoost;
-		if (raining) speedMultiplier += settings.rainGrowthBoost;
-		if (dryFarmland) speedMultiplier *= Math.max(0.0d, 1.0d - settings.dryFarmlandPenalty);
-		speedMultiplier = Math.max(0.0d, speedMultiplier);
+		double speedMultiplier = resolveGrowthSpeedMultiplier(rule, world, cropPos);
 
 		long rawPreviousAbsolute = Math.max(0L, crop.lastProcessedAbsoluteDayTime);
 		long previousAbsolute = normalizePreviousAbsoluteTick(crop.lastProcessedAbsoluteDayTime, currentAbsoluteDayTime);
@@ -769,6 +1152,13 @@ public final class FarmingCropsManager {
 		}
 
 		updateCropBlockAge(world, cropPos, state, rule, crop);
+		BlockState updatedState = world.getBlockState(cropPos);
+		boolean isGrowthComplete = isCropMatureBlock(updatedState, rule)
+			|| isMaxAge(updatedState)
+			|| crop.progressGrowthTicks + CROP_DUE_EPSILON >= requiredTicks;
+		if (!wasGrowthComplete && isGrowthComplete) {
+			FarmingPlotIndicatorManager.invalidatePlot(world, crop.soilPos);
+		}
 	}
 
 	public static void handleBlockBreak(Level world, BlockPos pos, BlockState state, BlockEntity blockEntity) {
@@ -787,6 +1177,7 @@ public final class FarmingCropsManager {
 		String cropEntryKey = cropKey(serverLevel, pos);
 		CropState cropState = removeCropStateByKey(cropEntryKey);
 		if (cropState != null) {
+			FarmingPlotIndicatorManager.invalidatePlot(serverLevel, cropState.soilPos);
 			PlotState soilPlot = findPlot(serverLevel, BlockPos.of(cropState.soilPos));
 			if (soilPlot != null && soilPlot.cropPos == pos.asLong()) {
 				soilPlot.clearCrop();
@@ -924,6 +1315,7 @@ public final class FarmingCropsManager {
 		pendingHarvestRulesByKey.remove(cropKey(world, cropPos));
 		CropState removed = removeCropStateByKey(cropKey(world, cropPos));
 		BlockPos soilPos = removed == null ? cropPos.below() : BlockPos.of(removed.soilPos);
+		FarmingPlotIndicatorManager.invalidatePlot(world, soilPos.asLong());
 		PlotState plot = findPlot(world, soilPos);
 		if (plot != null && (!plot.hasCrop() || plot.cropPos == cropPos.asLong() || removed != null)) {
 			plot.clearCrop();
@@ -1034,6 +1426,7 @@ public final class FarmingCropsManager {
 		if (removed == null) {
 			return;
 		}
+		FarmingPlotIndicatorManager.invalidatePlot(world, soilPos.asLong());
 		if (removed.hasCrop()) {
 			removeCropStateByKey(cropKey(world, BlockPos.of(removed.cropPos)));
 		}
@@ -1048,16 +1441,42 @@ public final class FarmingCropsManager {
 	}
 
 	private static PlotState putPlotState(String key, PlotState value) {
-		return plotsByKey.put(key, value);
+		PlotState previous = plotsByKey.put(key, value);
+		if (previous != null && (value == null || !plotChunkKey(previous).equals(plotChunkKey(value)))) {
+			removePlotKeyFromChunk(previous);
+		}
+		if (value != null) {
+			plotKeysByChunk.computeIfAbsent(plotChunkKey(value), ignored -> new HashSet<>()).add(key);
+		}
+		return previous;
 	}
 
 	private static PlotState removePlotStateByKey(String key) {
-		return plotsByKey.remove(key);
+		PlotState removed = plotsByKey.remove(key);
+		if (removed != null) {
+			removePlotKeyFromChunk(removed);
+		}
+		return removed;
+	}
+
+	private static void removePlotKeyFromChunk(PlotState plot) {
+		if (plot == null) {
+			return;
+		}
+		String chunkKey = plotChunkKey(plot);
+		Set<String> keys = plotKeysByChunk.get(chunkKey);
+		if (keys == null || !keys.remove(plot.key())) {
+			return;
+		}
+		if (keys.isEmpty()) {
+			plotKeysByChunk.remove(chunkKey);
+		}
 	}
 
 	private static CropState putCropState(String key, CropState value) {
 		CropState previous = cropsByKey.put(key, value);
 		if (previous != null && (value == null || !cropChunkKey(previous).equals(cropChunkKey(value)))) {
+			invalidateCropDueEntry(previous);
 			removeCropKeyFromChunk(previous);
 		}
 		if (value != null) {
@@ -1069,9 +1488,20 @@ public final class FarmingCropsManager {
 	private static CropState removeCropStateByKey(String key) {
 		CropState removed = cropsByKey.remove(key);
 		if (removed != null) {
+			invalidateCropDueEntry(removed);
 			removeCropKeyFromChunk(removed);
 		}
 		return removed;
+	}
+
+	private static void invalidateCropDueEntry(CropState crop) {
+		if (crop == null) {
+			return;
+		}
+		Map<String, Long> versions = cropDueVersionsByChunk.get(cropChunkKey(crop));
+		if (versions != null) {
+			versions.remove(crop.key());
+		}
 	}
 
 	private static void removeCropKeyFromChunk(CropState crop) {
@@ -1090,6 +1520,18 @@ public final class FarmingCropsManager {
 
 	private static String cropChunkKey(CropState crop) {
 		return crop == null ? "" : cropChunkKey(crop.levelId, BlockPos.getX(crop.cropPos) >> 4, BlockPos.getZ(crop.cropPos) >> 4);
+	}
+
+	private static String plotChunkKey(PlotState plot) {
+		return plot == null ? "" : plotChunkKey(plot.levelId, BlockPos.getX(plot.soilPos) >> 4, BlockPos.getZ(plot.soilPos) >> 4);
+	}
+
+	private static String plotChunkKey(ServerLevel world, int chunkX, int chunkZ) {
+		return plotChunkKey(levelId(world), chunkX, chunkZ);
+	}
+
+	private static String plotChunkKey(String levelId, int chunkX, int chunkZ) {
+		return (levelId == null ? "" : levelId) + "|" + chunkX + "|" + chunkZ;
 	}
 
 	private static String cropChunkKey(ServerLevel world, int chunkX, int chunkZ) {
@@ -1516,6 +1958,27 @@ public final class FarmingCropsManager {
 		return Math.max(1.0d, rule.growthMinecraftDays() * TimeAPIManager.MINECRAFT_TICKS_PER_CYCLE);
 	}
 
+	private static double resolveGrowthSpeedMultiplier(CropRule rule, ServerLevel world, BlockPos cropPos) {
+		if (rule == null || world == null || cropPos == null) {
+			return 0.0d;
+		}
+
+		BlockPos soilPos = cropPos.below();
+		BlockState soilState = world.getBlockState(soilPos);
+		PlotState plot = findPlot(world, soilPos);
+		double speedMultiplier = 1.0d + resolveGrowingConditionsSpeedModifier(rule, world, cropPos);
+		if (plot != null && plot.fertilized) {
+			speedMultiplier += settings.fertilizedGrowthBoost;
+		}
+		if (world.isRainingAt(cropPos)) {
+			speedMultiplier += settings.rainGrowthBoost;
+		}
+		if (isDryFarmland(soilState)) {
+			speedMultiplier *= Math.max(0.0d, 1.0d - settings.dryFarmlandPenalty);
+		}
+		return Math.max(0.0d, speedMultiplier);
+	}
+
 	private static double resolveGrowingConditionsSpeedModifier(CropRule rule, ServerLevel world, BlockPos cropPos) {
 		if (rule == null || world == null || cropPos == null || rule.growingConditions() == null) {
 			return 0.0d;
@@ -1652,10 +2115,28 @@ public final class FarmingCropsManager {
 			return fallback;
 		}
 		JsonElement element = object.get(key);
-		if (element == null || !element.isJsonPrimitive() || !element.getAsJsonPrimitive().isBoolean()) {
+		if (element == null || !element.isJsonPrimitive()) {
 			return fallback;
 		}
-		return element.getAsBoolean();
+
+		var primitive = element.getAsJsonPrimitive();
+		if (primitive.isBoolean()) {
+			return primitive.getAsBoolean();
+		}
+
+		// NBT has no native boolean tag. JsonOps therefore exposes boolean values
+		// read back from persistent NBT as numeric byte values (0 or 1).
+		if (primitive.isNumber()) {
+			try {
+				int value = primitive.getAsInt();
+				if (value == 0) return false;
+				if (value == 1) return true;
+			} catch (RuntimeException ignored) {
+				// Fall through to the supplied fallback for malformed data.
+			}
+		}
+
+		return fallback;
 	}
 
 	private static long getLong(JsonObject object, String key, long fallback) {

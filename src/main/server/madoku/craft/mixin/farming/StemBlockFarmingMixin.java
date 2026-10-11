@@ -14,18 +14,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(StemBlock.class)
 public abstract class StemBlockFarmingMixin {
 	@Inject(method = "randomTick", at = @At("HEAD"), cancellable = true)
-	private void madokuCraft$handleStemRandomTick(
+	private void madokuCraft$reconcileStemRandomTick(
 		BlockState state,
 		ServerLevel level,
 		BlockPos pos,
-		RandomSource random,
+		RandomSource ignoredRandom,
 		CallbackInfo ci
 	) {
 		if (!FarmingAPIManager.isEnabled() || !FarmingAPIManager.isManagedCrop(state)) {
 			return;
 		}
 
-		if (FarmingAPIManager.handleCropRandomTick(level, pos, state, random)) {
+		if (FarmingAPIManager.handleCropRandomTick(level, pos, state, ignoredRandom)) {
 			ci.cancel();
 		}
 	}

@@ -12,4 +12,5 @@ public final class MadokuFarmingInitializer implements ModInitializer, MadokuSta
 	@Override public void reset() { MadokuFarmingManager.reset(); }
 	@Override public void loadPersistedData(MinecraftServer server) { MadokuFarmingManager.loadPersistedData(server); }
 	@Override public void onServerStarted(MinecraftServer server) { MadokuFarmingManager.onServerStarted(server); }
+	@Override public void onServerTick(MinecraftServer server) { MadokuFarmingManager.onServerTick(server); }
 }

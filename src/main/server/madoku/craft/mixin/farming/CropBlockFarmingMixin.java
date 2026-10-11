@@ -14,18 +14,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(CropBlock.class)
 public abstract class CropBlockFarmingMixin {
 	@Inject(method = "randomTick", at = @At("HEAD"), cancellable = true)
-	private void madokuCraft$handleCropRandomTick(
+	private void madokuCraft$reconcileCropRandomTick(
 		BlockState state,
 		ServerLevel level,
 		BlockPos pos,
-		RandomSource random,
+		RandomSource ignoredRandom,
 		CallbackInfo ci
 	) {
 		if (!FarmingAPIManager.isEnabled() || !FarmingAPIManager.isManagedCrop(state)) {
 			return;
 		}
 
-		if (FarmingAPIManager.handleCropRandomTick(level, pos, state, random)) {
+		if (FarmingAPIManager.handleCropRandomTick(level, pos, state, ignoredRandom)) {
 			ci.cancel();
 		}
 	}

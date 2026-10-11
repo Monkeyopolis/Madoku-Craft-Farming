@@ -19,15 +19,22 @@ public final class MadokuFarmingManager {
 		FarmingConfigManager.initialize();
 		FarmingCropsManager.initialize();
 		FarmingComposterManager.initialize();
+		FarmingPlotIndicatorManager.initialize();
 	}
 
 	public static void reset() {
 		FarmingCropsManager.reset();
 		FarmingComposterManager.reset();
+		FarmingPlotIndicatorManager.onServerStopped();
 	}
 
 	public static void onServerStarted(MinecraftServer server) {
 		FarmingCropsManager.onServerStarted(server);
+		FarmingPlotIndicatorManager.onServerStarted(server);
+	}
+
+	public static void onServerTick(MinecraftServer server) {
+		FarmingPlotIndicatorManager.onServerTick(server);
 	}
 
 	public static void loadPersistedData(MinecraftServer server) {
