@@ -76,6 +76,10 @@ final class FarmingPlotIndicatorManager {
 		if (server == null) {
 			return;
 		}
+		if (!FarmingCropsManager.isPlotIndicatorEnabled()) {
+			clearIndicators(server);
+			return;
+		}
 
 		long now = Math.max(0L, TimeAPIManager.getGameplayTicks());
 		boolean forcedResync = resyncRequested;
@@ -116,6 +120,25 @@ final class FarmingPlotIndicatorManager {
 		AdaptiveIntervalAPIManager.clearSystem(ADAPTIVE_INTERVAL_ID);
 		nextSyncTick = Long.MIN_VALUE;
 		resyncRequested = false;
+	}
+
+	private static void clearIndicators(MinecraftServer server) {
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			Map<Long, FarmingCropsManager.PlotIndicatorState> previous = LAST_SENT.get(player.getUUID());
+			if (previous == null || previous.isEmpty()) {
+				continue;
+			}
+			for (Long soilPos : previous.keySet()) {
+				FarmingPlotIndicatorNetworking.send(player, new FarmingPlotIndicatorPayloadManager(
+					soilPos,
+					-1L,
+					0.0F,
+					0.0F,
+					true
+				));
+			}
+			previous.clear();
+		}
 	}
 
 	private static void requestResync(ServerLevel level, int chunkX, int chunkZ) {

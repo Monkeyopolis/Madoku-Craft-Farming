@@ -20,6 +20,7 @@ public final class FarmingConfigManager {
 	public static final String FIELD_FERTILIZED_GROWTH_BOOST = "fertilized-growth-boost";
 	public static final String FIELD_FERTILIZED_YIELD_BOOST = "fertilized-yield-boost";
 	public static final String FIELD_DRY_FARMLAND_PENALTY = "dry-farmland-penalty";
+	public static final String FIELD_FARM_INDICATOR = "farm-indicator";
 
 	public static final double DEFAULT_RAIN_GROWTH_BOOST = 0.25d;
 	public static final double DEFAULT_FERTILIZED_GROWTH_BOOST = 0.25d;
@@ -69,6 +70,7 @@ public final class FarmingConfigManager {
 			.put(FIELD_FERTILIZED_GROWTH_BOOST, DEFAULT_FERTILIZED_GROWTH_BOOST)
 			.put(FIELD_FERTILIZED_YIELD_BOOST, DEFAULT_FERTILIZED_YIELD_BOOST)
 			.put(FIELD_DRY_FARMLAND_PENALTY, DEFAULT_DRY_FARMLAND_PENALTY)
+			.object(FIELD_FARM_INDICATOR, indicator -> indicator.put(FIELD_ENABLED, true))
 			.build();
 	}
 }

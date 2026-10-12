@@ -240,6 +240,10 @@ public final class FarmingCropsManager {
 		return settings.enabled;
 	}
 
+	public static boolean isPlotIndicatorEnabled() {
+		return settings.enabled && settings.farmIndicatorEnabled;
+	}
+
 	public static String createClientSyncSnapshot() {
 		JsonObject snapshot = JSONFormatAPIManager.object()
 			.put("settings", settings.toConfigJson())
@@ -2343,6 +2347,7 @@ public final class FarmingCropsManager {
 
 	private record Settings(
 		boolean enabled,
+		boolean farmIndicatorEnabled,
 		double rainGrowthBoost,
 		double fertilizedGrowthBoost,
 		double fertilizedYieldBoost,
@@ -2350,6 +2355,7 @@ public final class FarmingCropsManager {
 	) {
 		private static Settings defaults() {
 			return new Settings(
+				true,
 				true,
 				FarmingConfigManager.DEFAULT_RAIN_GROWTH_BOOST,
 				FarmingConfigManager.DEFAULT_FERTILIZED_GROWTH_BOOST,
@@ -2360,6 +2366,11 @@ public final class FarmingCropsManager {
 
 		private static Settings fromJson(JsonObject source) {
 			boolean enabled = getBoolean(source, FarmingConfigManager.FIELD_ENABLED, true);
+			boolean farmIndicatorEnabled = getBoolean(
+				readObject(source, FarmingConfigManager.FIELD_FARM_INDICATOR),
+				FarmingConfigManager.FIELD_ENABLED,
+				true
+			);
 			double rainBoost = clampDouble(
 				getDouble(source, FarmingConfigManager.FIELD_RAIN_GROWTH_BOOST, FarmingConfigManager.DEFAULT_RAIN_GROWTH_BOOST),
 				FarmingConfigManager.DEFAULT_RAIN_GROWTH_BOOST,
@@ -2386,6 +2397,7 @@ public final class FarmingCropsManager {
 			);
 			return new Settings(
 				enabled,
+				farmIndicatorEnabled,
 				rainBoost,
 				fertilizedBoost,
 				fertilizedYieldBoost,
@@ -2396,6 +2408,7 @@ public final class FarmingCropsManager {
 		private JsonObject toConfigJson() {
 			return JSONFormatAPIManager.object()
 				.put(FarmingConfigManager.FIELD_ENABLED, enabled)
+				.object(FarmingConfigManager.FIELD_FARM_INDICATOR, indicator -> indicator.put(FarmingConfigManager.FIELD_ENABLED, farmIndicatorEnabled))
 				.put(FarmingConfigManager.FIELD_RAIN_GROWTH_BOOST, rainGrowthBoost)
 				.put(FarmingConfigManager.FIELD_FERTILIZED_GROWTH_BOOST, fertilizedGrowthBoost)
 				.put(FarmingConfigManager.FIELD_FERTILIZED_YIELD_BOOST, fertilizedYieldBoost)
