@@ -33,7 +33,7 @@ public final class FarmingPlotIndicatorClient {
 	private static final double MAX_INDICATOR_DISTANCE = 8.0D;
 	private static final long VISIBILITY_REFRESH_INTERVAL_TICKS = 2L;
 	private static final float CAMERA_REFRESH_ANGLE = 12.0F;
-	private static final float INDICATOR_SCALE = 0.72F;
+	private static final float INDICATOR_SCALE = 0.5F;
 	private static final float ROW_SPACING = 0.28F;
 	private static final Identifier INDICATOR_FONT_ID =
 		Identifier.fromNamespaceAndPath("madoku-craft", "plot_indicator");
