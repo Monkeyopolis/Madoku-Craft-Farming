@@ -1,8 +1,11 @@
 package madoku.craft.java.farming;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -28,7 +31,10 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 
 /** Renders compact growth-time and growth-speed rows above managed crop plots. */
 public final class FarmingPlotIndicatorClient {
+	private static final float GROWTH_SPEED_CHANGE_EPSILON = 0.01F;
+	private static final float WORLD_CLOCK_RATE_CHANGE_EPSILON = 0.001F;
 	private static final Map<Long, ClientPlotState> STATES_BY_SOIL = new ConcurrentHashMap<>();
+	private static final Map<Long, VisiblePlot> VISIBLE_PLOTS_BY_SOIL = new HashMap<>();
 	private static final List<VisiblePlot> VISIBLE_PLOTS = new ArrayList<>();
 	private static final double MAX_INDICATOR_DISTANCE = 8.0D;
 	private static final long VISIBILITY_REFRESH_INTERVAL_TICKS = 2L;
@@ -70,31 +76,49 @@ public final class FarmingPlotIndicatorClient {
 				}
 				ClientLevel level = Minecraft.getInstance().level;
 				ClientPlotState previous = STATES_BY_SOIL.get(payload.soilPos());
-				double receivedAtGameTime = currentClientTime();
+				long receivedAtGameTime = currentClientGameTime();
 				float receivedRemaining = Math.max(0.0F, payload.remainingGrowthTicks());
-				if (previous != null && previous.cropPos().equals(BlockPos.of(payload.cropPos()))) {
-					double previousElapsed = Math.max(0.0D, receivedAtGameTime - previous.receivedAtGameTime());
-					double locallyProjectedRemaining = Math.max(
-						0.0D,
-						previous.remainingGrowthTicks() - previousElapsed * previous.growthSpeedMultiplier()
-					);
-					if (receivedRemaining > locallyProjectedRemaining) {
-						receivedRemaining = (float) locallyProjectedRemaining;
+				float receivedSpeed = Math.max(0.0F, payload.growthSpeedMultiplier());
+				float receivedClockRate = Math.max(0.0F, payload.worldClockRate());
+				boolean sameCrop = previous != null && previous.cropPos().equals(BlockPos.of(payload.cropPos()));
+				boolean speedChanged = false;
+				boolean clockRateChanged = false;
+				double locallyProjectedRemaining = Double.NaN;
+				if (sameCrop) {
+					speedChanged = Math.abs(receivedSpeed - previous.growthSpeedMultiplier()) >= GROWTH_SPEED_CHANGE_EPSILON;
+					clockRateChanged = Math.abs(receivedClockRate - previous.worldClockRate()) >= WORLD_CLOCK_RATE_CHANGE_EPSILON;
+					if (!speedChanged && !clockRateChanged) {
+						double previousElapsed = Math.max(0L, receivedAtGameTime - previous.receivedAtGameTime());
+						locallyProjectedRemaining = Math.max(
+							0.0D,
+							previous.remainingGrowthTicks()
+								- previousElapsed * previous.growthSpeedMultiplier() * previous.worldClockRate()
+						);
+						if (receivedRemaining > locallyProjectedRemaining) {
+							receivedRemaining = (float) locallyProjectedRemaining;
+						}
 					}
 				}
+				boolean visibilityChanged = previous == null
+					|| previous.level() != level
+					|| !sameCrop;
 				STATES_BY_SOIL.put(payload.soilPos(), new ClientPlotState(
 					level,
 					BlockPos.of(payload.soilPos()),
 					BlockPos.of(payload.cropPos()),
 					receivedRemaining,
-					Math.max(0.0F, payload.growthSpeedMultiplier()),
+					receivedSpeed,
+					receivedClockRate,
 					receivedAtGameTime
 				));
-				visibleCacheDirty = true;
+				if (visibilityChanged) {
+					visibleCacheDirty = true;
+				}
 			}
 		);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			STATES_BY_SOIL.clear();
+			VISIBLE_PLOTS_BY_SOIL.clear();
 			VISIBLE_PLOTS.clear();
 			visibleCacheLevel = null;
 			visibleCacheGameTime = Long.MIN_VALUE;
@@ -118,6 +142,7 @@ public final class FarmingPlotIndicatorClient {
 				return plot == null || (plot.level() != null && plot.level() != level);
 			});
 			bindUnboundStates(level);
+			VISIBLE_PLOTS_BY_SOIL.clear();
 			VISIBLE_PLOTS.clear();
 			visibleCacheLevel = level;
 			visibleCacheGameTime = Long.MIN_VALUE;
@@ -132,6 +157,7 @@ public final class FarmingPlotIndicatorClient {
 			refreshVisiblePlots(level, levelRenderState, cameraState);
 		}
 
+		long currentGameTime = level.getGameTime();
 		for (VisiblePlot visiblePlot : VISIBLE_PLOTS) {
 			ClientPlotState plot = bindStateToLevel(
 				visiblePlot.soilPosKey(),
@@ -145,7 +171,7 @@ public final class FarmingPlotIndicatorClient {
 				continue;
 			}
 
-			visiblePlot.updateComponents(plot, levelRenderState.gameTime);
+			visiblePlot.updateComponents(plot, currentGameTime);
 
 			Vec3 anchor = new Vec3(
 				visiblePlot.soilPos().getX() + 0.5D,
@@ -231,6 +257,7 @@ public final class FarmingPlotIndicatorClient {
 			return !level.getChunkSource().hasChunk(soilPos.getX() >> 4, soilPos.getZ() >> 4);
 		});
 		VISIBLE_PLOTS.clear();
+		Set<Long> visiblePlotKeys = new HashSet<>();
 		for (Map.Entry<Long, ClientPlotState> entry : STATES_BY_SOIL.entrySet()) {
 			ClientPlotState plot = bindStateToLevel(entry.getKey(), entry.getValue(), level);
 			if (plot == null || (plot.level() != null && plot.level() != level)) {
@@ -244,8 +271,17 @@ public final class FarmingPlotIndicatorClient {
 				LightCoordsUtil.getLightCoords(level, plot.cropPos()),
 				2
 			);
-			VISIBLE_PLOTS.add(new VisiblePlot(entry.getKey(), plot.soilPos(), indicatorLight));
+			VisiblePlot visiblePlot = VISIBLE_PLOTS_BY_SOIL.get(entry.getKey());
+			if (visiblePlot == null) {
+				visiblePlot = new VisiblePlot(entry.getKey(), plot.soilPos(), indicatorLight);
+				VISIBLE_PLOTS_BY_SOIL.put(entry.getKey(), visiblePlot);
+			} else {
+				visiblePlot.updateIndicatorLight(indicatorLight);
+			}
+			VISIBLE_PLOTS.add(visiblePlot);
+			visiblePlotKeys.add(entry.getKey());
 		}
+		VISIBLE_PLOTS_BY_SOIL.keySet().removeIf(key -> !visiblePlotKeys.contains(key));
 
 		visibleCacheGameTime = levelRenderState.gameTime;
 		visibleCacheCameraBlockPos = cameraState.blockPos == null ? Long.MIN_VALUE : cameraState.blockPos.asLong();
@@ -308,15 +344,24 @@ public final class FarmingPlotIndicatorClient {
 		return cameraState.cullFrustum == null || cameraState.cullFrustum.isVisible(plot.bounds());
 	}
 
-	private static String formatRemainingTime(double remainingGrowthTicks, double speedMultiplier) {
-		if (remainingGrowthTicks <= 0.05D) {
-			return "0";
+	private static long resolveRemainingSeconds(double remainingGrowthTicks, double speedMultiplier) {
+		if (remainingGrowthTicks <= 0.0D) {
+			return 0L;
 		}
 		if (speedMultiplier <= 0.0D) {
+			return -1L;
+		}
+		return Math.max(1L, (long) Math.ceil(remainingGrowthTicks / speedMultiplier / 20.0D));
+	}
+
+	private static String formatRemainingTime(long seconds) {
+		if (seconds == 0L) {
+			return "0";
+		}
+		if (seconds < 0L) {
 			return "--";
 		}
 
-		long seconds = Math.max(1L, (long) Math.ceil(remainingGrowthTicks / speedMultiplier / 20.0D));
 		long hours = seconds / 3600L;
 		long minutes = (seconds % 3600L) / 60L;
 		long remainingSeconds = seconds % 60L;
@@ -333,13 +378,17 @@ public final class FarmingPlotIndicatorClient {
 		return value < 10L ? "0" + value : Long.toString(value);
 	}
 
-	private static String formatSpeed(double value) {
-		return Math.round((value - 1.0D) * 100.0D) + "%";
+	private static long resolveSpeedPercent(double value) {
+		return Math.round((value - 1.0D) * 100.0D);
 	}
 
-	private static double currentClientTime() {
+	private static String formatSpeedPercent(long value) {
+		return value + "%";
+	}
+
+	private static long currentClientGameTime() {
 		Minecraft minecraft = Minecraft.getInstance();
-		return minecraft.level == null ? 0.0D : minecraft.level.getGameTime();
+		return minecraft.level == null ? 0L : minecraft.level.getGameTime();
 	}
 
 	private record ClientPlotState(
@@ -348,7 +397,8 @@ public final class FarmingPlotIndicatorClient {
 		BlockPos cropPos,
 		float remainingGrowthTicks,
 		float growthSpeedMultiplier,
-		double receivedAtGameTime
+		float worldClockRate,
+		long receivedAtGameTime
 	) {
 		private ClientPlotState withLevel(ClientLevel nextLevel) {
 			return new ClientPlotState(
@@ -357,6 +407,7 @@ public final class FarmingPlotIndicatorClient {
 				cropPos,
 				remainingGrowthTicks,
 				growthSpeedMultiplier,
+				worldClockRate,
 				receivedAtGameTime
 			);
 		}
@@ -365,9 +416,11 @@ public final class FarmingPlotIndicatorClient {
 	private static final class VisiblePlot {
 		private final long soilPosKey;
 		private final BlockPos soilPos;
-		private final int indicatorLight;
+		private int indicatorLight;
 		private final AABB bounds;
 		private long formattedGameTime = Long.MIN_VALUE;
+		private long formattedRemainingSeconds = Long.MIN_VALUE;
+		private long formattedSpeedPercent = Long.MIN_VALUE;
 		private Component timeComponent;
 		private Component speedComponent;
 
@@ -389,13 +442,23 @@ public final class FarmingPlotIndicatorClient {
 			if (formattedGameTime == gameTime) {
 				return;
 			}
-			double elapsedTicks = Math.max(0.0D, gameTime - plot.receivedAtGameTime());
+			double elapsedTicks = Math.max(0L, gameTime - plot.receivedAtGameTime());
 			double remainingGrowthTicks = Math.max(
 				0.0D,
-				plot.remainingGrowthTicks() - elapsedTicks * plot.growthSpeedMultiplier()
+				plot.remainingGrowthTicks()
+					- elapsedTicks * plot.growthSpeedMultiplier() * plot.worldClockRate()
 			);
-			String nextTimeText = formatRemainingTime(remainingGrowthTicks, plot.growthSpeedMultiplier());
-			String nextSpeedText = formatSpeed(plot.growthSpeedMultiplier());
+			long remainingSeconds = resolveRemainingSeconds(
+				remainingGrowthTicks,
+				plot.growthSpeedMultiplier() * plot.worldClockRate()
+			);
+			long speedPercent = resolveSpeedPercent(plot.growthSpeedMultiplier());
+			if (remainingSeconds == formattedRemainingSeconds && speedPercent == formattedSpeedPercent) {
+				formattedGameTime = gameTime;
+				return;
+			}
+			String nextTimeText = formatRemainingTime(remainingSeconds);
+			String nextSpeedText = formatSpeedPercent(speedPercent);
 			timeComponent = component(
 				GROWTH_TIME_ICON_CHARACTER,
 				nextTimeText,
@@ -406,7 +469,13 @@ public final class FarmingPlotIndicatorClient {
 				nextSpeedText,
 				0xFF55FF77
 			);
+			formattedRemainingSeconds = remainingSeconds;
+			formattedSpeedPercent = speedPercent;
 			formattedGameTime = gameTime;
+		}
+
+		private void updateIndicatorLight(int nextIndicatorLight) {
+			indicatorLight = nextIndicatorLight;
 		}
 
 		private static Component component(char iconCharacter, String text, int color) {

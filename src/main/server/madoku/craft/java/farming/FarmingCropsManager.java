@@ -100,6 +100,7 @@ public final class FarmingCropsManager {
 	private static final long ACTIVE_CROP_UPDATE_INTERVAL_TICKS = 1L;
 	private static final long ZERO_SPEED_RECHECK_INTERVAL_TICKS = 20L;
 	private static final double CROP_DUE_EPSILON = 1.0e-6d;
+	private static final double GROWTH_SPEED_STEP = 0.01d;
 
 	private static volatile Settings settings = Settings.defaults();
 	private static volatile boolean dirty = false;
@@ -427,6 +428,9 @@ public final class FarmingCropsManager {
 
 		String currentLevelId = levelId(world);
 		long currentAbsoluteDayTime = resolveAbsoluteDayTime(world);
+		float worldClockRate = world.getServer() == null
+			? 1.0F
+			: Math.max(0.0F, TimeAPIManager.resolveWorldClockRate(world.getServer()));
 		int radiusSquared = radius * radius;
 		int minChunkX = (center.getX() - radius) >> 4;
 		int maxChunkX = (center.getX() + radius) >> 4;
@@ -494,7 +498,8 @@ public final class FarmingCropsManager {
 						plot.soilPos,
 						plot.cropPos,
 						remainingGrowthTicks,
-						growthSpeedMultiplier
+						growthSpeedMultiplier,
+						worldClockRate
 					));
 				}
 			}
@@ -506,11 +511,13 @@ public final class FarmingCropsManager {
 		long soilPos,
 		long cropPos,
 		double remainingGrowthTicks,
-		double growthSpeedMultiplier
+		double growthSpeedMultiplier,
+		float worldClockRate
 	) {
 		public PlotIndicatorState {
 			remainingGrowthTicks = Math.max(0.0d, remainingGrowthTicks);
 			growthSpeedMultiplier = Math.max(0.0d, growthSpeedMultiplier);
+			worldClockRate = Math.max(0.0F, worldClockRate);
 		}
 	}
 
@@ -1980,7 +1987,17 @@ public final class FarmingCropsManager {
 		if (isDryFarmland(soilState)) {
 			speedMultiplier *= Math.max(0.0d, 1.0d - settings.dryFarmlandPenalty);
 		}
-		return Math.max(0.0d, speedMultiplier);
+		return quantizeGrowthSpeedMultiplier(speedMultiplier);
+	}
+
+	private static double quantizeGrowthSpeedMultiplier(double speedMultiplier) {
+		if (!Double.isFinite(speedMultiplier) || speedMultiplier <= 0.0d) {
+			return 0.0d;
+		}
+		return Math.max(
+			0.0d,
+			Math.round(speedMultiplier / GROWTH_SPEED_STEP) * GROWTH_SPEED_STEP
+		);
 	}
 
 	private static double resolveGrowingConditionsSpeedModifier(CropRule rule, ServerLevel world, BlockPos cropPos) {

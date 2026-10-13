@@ -12,6 +12,7 @@ public record FarmingPlotIndicatorPayloadManager(
 	long cropPos,
 	float remainingGrowthTicks,
 	float growthSpeedMultiplier,
+	float worldClockRate,
 	boolean removed
 ) implements CustomPacketPayload {
 	public static final Type<FarmingPlotIndicatorPayloadManager> TYPE =
@@ -26,6 +27,8 @@ public record FarmingPlotIndicatorPayloadManager(
 			FarmingPlotIndicatorPayloadManager::remainingGrowthTicks,
 			ByteBufCodecs.FLOAT,
 			FarmingPlotIndicatorPayloadManager::growthSpeedMultiplier,
+			ByteBufCodecs.FLOAT,
+			FarmingPlotIndicatorPayloadManager::worldClockRate,
 			ByteBufCodecs.BOOL,
 			FarmingPlotIndicatorPayloadManager::removed,
 			FarmingPlotIndicatorPayloadManager::new

@@ -1,8 +1,10 @@
 package madoku.craft.java.farming;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import madoku.craft.java.core.chunk.ChunkAPIManager;
@@ -19,12 +21,15 @@ import net.minecraft.core.BlockPos;
 final class FarmingPlotIndicatorManager {
 	private static final String ADAPTIVE_INTERVAL_ID = "madoku-farming-plot-indicators";
 	private static final long MIN_SYNC_INTERVAL_TICKS = 2L;
-	private static final long MAX_SYNC_INTERVAL_TICKS = 8L;
+	private static final long MAX_SYNC_INTERVAL_TICKS = 10L;
+	private static final double GROWTH_SPEED_CHANGE_EPSILON = 0.01D;
+	private static final double WORLD_CLOCK_RATE_CHANGE_EPSILON = 0.001D;
 	private static final int INDICATOR_VIEW_DISTANCE = 8;
 	private static final Map<UUID, Map<Long, FarmingCropsManager.PlotIndicatorState>> LAST_SENT = new HashMap<>();
 	private static final Map<UUID, ServerLevel> LAST_LEVEL_BY_PLAYER = new HashMap<>();
 	private static final Map<UUID, ServerLevel> LAST_SYNC_CELL_LEVEL_BY_PLAYER = new HashMap<>();
 	private static final Map<UUID, Long> LAST_SYNC_CELL_BY_PLAYER = new HashMap<>();
+	private static final Map<ServerLevel, Set<UUID>> DIRTY_PLAYERS_BY_LEVEL = new HashMap<>();
 	private static final ChunkAPIManager.ChunkLifecycleListener CHUNK_LISTENER = new ChunkAPIManager.ChunkLifecycleListener() {
 		@Override public void onChunkLoaded(ServerLevel level, int chunkX, int chunkZ) {
 			requestResync(level, chunkX, chunkZ);
@@ -35,7 +40,6 @@ final class FarmingPlotIndicatorManager {
 		}
 	};
 	private static long nextSyncTick = Long.MIN_VALUE;
-	private static boolean resyncRequested;
 	private static boolean initialized;
 
 	private FarmingPlotIndicatorManager() {
@@ -57,6 +61,7 @@ final class FarmingPlotIndicatorManager {
 				LAST_LEVEL_BY_PLAYER.remove(handler.player.getUUID());
 				LAST_SYNC_CELL_LEVEL_BY_PLAYER.remove(handler.player.getUUID());
 				LAST_SYNC_CELL_BY_PLAYER.remove(handler.player.getUUID());
+				clearDirtyPlayer(handler.player.getUUID());
 			}
 		});
 		initialized = true;
@@ -67,9 +72,9 @@ final class FarmingPlotIndicatorManager {
 		LAST_LEVEL_BY_PLAYER.clear();
 		LAST_SYNC_CELL_LEVEL_BY_PLAYER.clear();
 		LAST_SYNC_CELL_BY_PLAYER.clear();
+		DIRTY_PLAYERS_BY_LEVEL.clear();
 		AdaptiveIntervalAPIManager.clearSystem(ADAPTIVE_INTERVAL_ID);
 		nextSyncTick = Long.MIN_VALUE;
-		resyncRequested = false;
 	}
 
 	static void onServerTick(MinecraftServer server) {
@@ -82,21 +87,23 @@ final class FarmingPlotIndicatorManager {
 		}
 
 		long now = Math.max(0L, TimeAPIManager.getGameplayTicks());
-		boolean forcedResync = resyncRequested;
-		resyncRequested = false;
-		if (!forcedResync && nextSyncTick != Long.MIN_VALUE && now < nextSyncTick) {
-			return;
+		boolean intervalDue = nextSyncTick == Long.MIN_VALUE || now >= nextSyncTick;
+		if (intervalDue) {
+			long interval = AdaptiveIntervalAPIManager.resolve(
+				ADAPTIVE_INTERVAL_ID,
+				server,
+				MIN_SYNC_INTERVAL_TICKS,
+				MAX_SYNC_INTERVAL_TICKS
+			);
+			nextSyncTick = now + Math.max(1L, interval);
 		}
-		long interval = AdaptiveIntervalAPIManager.resolve(
-			ADAPTIVE_INTERVAL_ID,
-			server,
-			MIN_SYNC_INTERVAL_TICKS,
-			MAX_SYNC_INTERVAL_TICKS
-		);
-		nextSyncTick = now + Math.max(1L, interval);
 
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (!(player.level() instanceof ServerLevel serverLevel)) {
+				continue;
+			}
+			boolean forcedResync = consumeDirtyPlayer(serverLevel, player.getUUID());
+			if (!intervalDue && !forcedResync) {
 				continue;
 			}
 			boolean enteredSyncCell = updateSyncCell(player, serverLevel);
@@ -117,9 +124,9 @@ final class FarmingPlotIndicatorManager {
 		LAST_LEVEL_BY_PLAYER.clear();
 		LAST_SYNC_CELL_LEVEL_BY_PLAYER.clear();
 		LAST_SYNC_CELL_BY_PLAYER.clear();
+		DIRTY_PLAYERS_BY_LEVEL.clear();
 		AdaptiveIntervalAPIManager.clearSystem(ADAPTIVE_INTERVAL_ID);
 		nextSyncTick = Long.MIN_VALUE;
-		resyncRequested = false;
 	}
 
 	private static void clearIndicators(MinecraftServer server) {
@@ -134,15 +141,67 @@ final class FarmingPlotIndicatorManager {
 					-1L,
 					0.0F,
 					0.0F,
+					1.0F,
 					true
 				));
 			}
 			previous.clear();
 		}
+		DIRTY_PLAYERS_BY_LEVEL.clear();
 	}
 
 	private static void requestResync(ServerLevel level, int chunkX, int chunkZ) {
-		resyncRequested = true;
+		if (level == null || level.getServer() == null) {
+			return;
+		}
+		Set<UUID> dirtyPlayers = null;
+		for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
+			if (player == null || player.level() != level || !isChunkRelevant(player, chunkX, chunkZ)) {
+				continue;
+			}
+			if (dirtyPlayers == null) {
+				dirtyPlayers = DIRTY_PLAYERS_BY_LEVEL.computeIfAbsent(level, ignored -> new HashSet<>());
+			}
+			dirtyPlayers.add(player.getUUID());
+		}
+	}
+
+	private static boolean consumeDirtyPlayer(ServerLevel level, UUID playerId) {
+		if (level == null || playerId == null) {
+			return false;
+		}
+		Set<UUID> dirtyPlayers = DIRTY_PLAYERS_BY_LEVEL.get(level);
+		if (dirtyPlayers == null) {
+			return false;
+		}
+		boolean dirty = dirtyPlayers.remove(playerId);
+		if (dirtyPlayers.isEmpty()) {
+			DIRTY_PLAYERS_BY_LEVEL.remove(level);
+		}
+		return dirty;
+	}
+
+	private static void clearDirtyPlayer(UUID playerId) {
+		if (playerId == null) {
+			return;
+		}
+		for (Set<UUID> dirtyPlayers : DIRTY_PLAYERS_BY_LEVEL.values()) {
+			dirtyPlayers.remove(playerId);
+		}
+		DIRTY_PLAYERS_BY_LEVEL.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+	}
+
+	private static boolean isChunkRelevant(ServerPlayer player, int chunkX, int chunkZ) {
+		if (player == null) {
+			return false;
+		}
+		double minX = chunkX * 16.0D;
+		double maxX = minX + 16.0D;
+		double minZ = chunkZ * 16.0D;
+		double maxZ = minZ + 16.0D;
+		double dx = player.getX() < minX ? minX - player.getX() : player.getX() > maxX ? player.getX() - maxX : 0.0D;
+		double dz = player.getZ() < minZ ? minZ - player.getZ() : player.getZ() > maxZ ? player.getZ() - maxZ : 0.0D;
+		return dx * dx + dz * dz <= (double) INDICATOR_VIEW_DISTANCE * INDICATOR_VIEW_DISTANCE;
 	}
 
 	private static boolean updateSyncCell(ServerPlayer player, ServerLevel level) {
@@ -178,6 +237,7 @@ final class FarmingPlotIndicatorManager {
 				-1L,
 				0.0F,
 				0.0F,
+				1.0F,
 				true
 			));
 		}
@@ -229,7 +289,9 @@ final class FarmingPlotIndicatorManager {
 			FarmingCropsManager.PlotIndicatorState rawState = entry.getValue();
 			FarmingCropsManager.PlotIndicatorState oldState = previous.get(entry.getKey());
 			FarmingCropsManager.PlotIndicatorState state = stabilize(oldState, rawState);
-			if (forceResync || changed(oldState, state)) {
+			boolean stateChanged = changed(oldState, state);
+			boolean shouldSend = forceResync || stateChanged;
+			if (shouldSend) {
 				FarmingPlotIndicatorNetworking.send(player, toPayload(state));
 			}
 			entry.setValue(state);
@@ -245,6 +307,7 @@ final class FarmingPlotIndicatorManager {
 					-1L,
 					0.0F,
 					0.0F,
+					1.0F,
 					true
 				));
 				iterator.remove();
@@ -270,13 +333,20 @@ final class FarmingPlotIndicatorManager {
 		if (previous == null || current == null || previous.cropPos() != current.cropPos()) {
 			return current;
 		}
+		if (Math.abs(current.growthSpeedMultiplier() - previous.growthSpeedMultiplier()) >= GROWTH_SPEED_CHANGE_EPSILON
+			|| Math.abs(current.worldClockRate() - previous.worldClockRate()) >= WORLD_CLOCK_RATE_CHANGE_EPSILON) {
+			// A weather, fertilization, or clock-rate change can make the displayed
+			// duration increase. Do not preserve a stale near-zero value.
+			return current;
+		}
 		return current.remainingGrowthTicks() <= previous.remainingGrowthTicks()
 			? current
 			: new FarmingCropsManager.PlotIndicatorState(
 				current.soilPos(),
 				current.cropPos(),
 				previous.remainingGrowthTicks(),
-				current.growthSpeedMultiplier()
+				current.growthSpeedMultiplier(),
+				current.worldClockRate()
 			);
 	}
 
@@ -297,7 +367,8 @@ final class FarmingPlotIndicatorManager {
 		}
 		return oldState.cropPos() != newState.cropPos()
 			|| Math.abs(oldState.remainingGrowthTicks() - newState.remainingGrowthTicks()) >= 0.25D
-			|| Math.abs(oldState.growthSpeedMultiplier() - newState.growthSpeedMultiplier()) >= 0.01D;
+			|| Math.abs(oldState.growthSpeedMultiplier() - newState.growthSpeedMultiplier()) >= GROWTH_SPEED_CHANGE_EPSILON
+			|| Math.abs(oldState.worldClockRate() - newState.worldClockRate()) >= WORLD_CLOCK_RATE_CHANGE_EPSILON;
 	}
 
 	private static FarmingPlotIndicatorPayloadManager toPayload(FarmingCropsManager.PlotIndicatorState state) {
@@ -306,6 +377,7 @@ final class FarmingPlotIndicatorManager {
 			state.cropPos(),
 			(float) Math.min(Float.MAX_VALUE, state.remainingGrowthTicks()),
 			(float) Math.min(Float.MAX_VALUE, state.growthSpeedMultiplier()),
+			state.worldClockRate(),
 			false
 		);
 	}
