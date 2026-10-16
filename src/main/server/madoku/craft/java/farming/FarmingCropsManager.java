@@ -1,6 +1,5 @@
 package madoku.craft.java.farming;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -28,6 +27,9 @@ import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponentMap;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -980,27 +982,25 @@ public final class FarmingCropsManager {
 		if (world == null) return;
 		String chunkKey = cropChunkKey(world, chunkX, chunkZ);
 		LOADED_CHUNK_KEYS.add(chunkKey);
-		JsonObject source = WorldChunkDataAPIManager.getChunkSystemData(world, chunkX, chunkZ, DATA_SYSTEM_ID);
-		boolean hasPersistedFarmingData = source.has(FIELD_PLOTS) || source.has(FIELD_CROPS);
+		CompoundTag source = WorldChunkDataAPIManager.getChunkSystemData(world, chunkX, chunkZ, DATA_SYSTEM_ID);
+		boolean hasPersistedFarmingData = source.contains(FIELD_PLOTS) || source.contains(FIELD_CROPS);
 		if (hasPersistedFarmingData) {
 			// A duplicate load callback can arrive after runtime state was already
 			// restored. Replace that chunk from durable data only when data exists;
 			// an empty attachment must not erase a valid in-memory state.
 			evictChunkRuntime(world, chunkX, chunkZ);
 		}
-		JsonElement plotsElement = source.get(FIELD_PLOTS);
-		if (plotsElement != null && plotsElement.isJsonArray()) {
-			for (JsonElement element : plotsElement.getAsJsonArray()) {
-				PlotState plot = PlotState.fromJson(element);
+		if (source.get(FIELD_PLOTS) instanceof ListTag plots) {
+			for (Tag element : plots) {
+				PlotState plot = element instanceof CompoundTag compound ? PlotState.fromNbt(compound) : null;
 				if (plot != null) {
 					putPlotState(plot.key(), plot);
 				}
 			}
 		}
-		JsonElement cropsElement = source.get(FIELD_CROPS);
-		if (cropsElement != null && cropsElement.isJsonArray()) {
-			for (JsonElement element : cropsElement.getAsJsonArray()) {
-				CropState crop = CropState.fromJson(element);
+		if (source.get(FIELD_CROPS) instanceof ListTag crops) {
+			for (Tag element : crops) {
+				CropState crop = element instanceof CompoundTag compound ? CropState.fromNbt(compound) : null;
 				if (crop != null) {
 					putCropState(crop.key(), crop);
 				}
@@ -1012,10 +1012,10 @@ public final class FarmingCropsManager {
 		if (world == null) return;
 		String chunkKey = cropChunkKey(world, chunkX, chunkZ);
 		LOADED_CHUNK_KEYS.add(chunkKey);
-		JsonObject data = toChunkPersistedData(world, chunkX, chunkZ);
-		JsonArray plots = data.getAsJsonArray(FIELD_PLOTS);
-		JsonArray crops = data.getAsJsonArray(FIELD_CROPS);
-		if ((plots == null || plots.isEmpty()) && (crops == null || crops.isEmpty())) {
+		CompoundTag data = toChunkPersistedData(world, chunkX, chunkZ);
+		ListTag plots = data.getList(FIELD_PLOTS).orElse(new ListTag());
+		ListTag crops = data.getList(FIELD_CROPS).orElse(new ListTag());
+		if (plots.isEmpty() && crops.isEmpty()) {
 			WorldChunkDataAPIManager.removeChunkSystemData(
 				new WorldChunkDataKey(levelId(world), chunkX, chunkZ), DATA_SYSTEM_ID
 			);
@@ -1065,29 +1065,32 @@ public final class FarmingCropsManager {
 		pendingHarvestRulesByKey.keySet().removeIf(key -> keyBelongsToChunk(key, levelId, chunkX, chunkZ));
 	}
 
-	private static JsonObject toChunkPersistedData(ServerLevel world, int chunkX, int chunkZ) {
-		JsonArray plots = new JsonArray();
+	private static CompoundTag toChunkPersistedData(ServerLevel world, int chunkX, int chunkZ) {
+		ListTag plots = new ListTag();
 		String chunkKey = plotChunkKey(world, chunkX, chunkZ);
 		Set<String> plotKeys = plotKeysByChunk.get(chunkKey);
 		if (plotKeys != null) {
 			for (String plotKey : plotKeys) {
 				PlotState plot = plotsByKey.get(plotKey);
 				if (plot != null) {
-					plots.add(plot.toJson());
+					plots.add(plot.toNbt());
 				}
 			}
 		}
-		JsonArray crops = new JsonArray();
+		ListTag crops = new ListTag();
 		Set<String> cropKeys = cropKeysByChunk.get(chunkKey);
 		if (cropKeys != null) {
 			for (String cropKey : cropKeys) {
 				CropState crop = cropsByKey.get(cropKey);
 				if (crop != null) {
-					crops.add(crop.toJson());
+					crops.add(crop.toNbt());
 				}
 			}
 		}
-		return JSONFormatAPIManager.object().put(FIELD_PLOTS, plots).put(FIELD_CROPS, crops).build();
+		CompoundTag data = new CompoundTag();
+		data.put(FIELD_PLOTS, plots);
+		data.put(FIELD_CROPS, crops);
+		return data;
 	}
 
 	private static int[] chunkCoordinates(String key, ServerLevel world) {
@@ -2131,6 +2134,26 @@ public final class FarmingCropsManager {
 		return Math.max(0, Math.min(safeLimit, (int) Math.floor(safeProgress * safeLimit + 1e-9d)));
 	}
 
+	private static boolean getBoolean(CompoundTag tag, String key, boolean fallback) {
+		try { return tag != null ? tag.getBoolean(key).orElse(fallback) : fallback; }
+		catch (RuntimeException exception) { return fallback; }
+	}
+
+	private static long getLong(CompoundTag tag, String key, long fallback) {
+		try { return tag != null ? tag.getLong(key).orElse(fallback) : fallback; }
+		catch (RuntimeException exception) { return fallback; }
+	}
+
+	private static double getDouble(CompoundTag tag, String key, double fallback) {
+		try { return tag != null ? tag.getDouble(key).orElse(fallback) : fallback; }
+		catch (RuntimeException exception) { return fallback; }
+	}
+
+	private static String getString(CompoundTag tag, String key, String fallback) {
+		try { return tag != null ? tag.getString(key).orElse(fallback) : fallback; }
+		catch (RuntimeException exception) { return fallback; }
+	}
+
 	private static boolean getBoolean(JsonObject object, String key, boolean fallback) {
 		if (object == null) {
 			return fallback;
@@ -2141,38 +2164,7 @@ public final class FarmingCropsManager {
 		}
 
 		var primitive = element.getAsJsonPrimitive();
-		if (primitive.isBoolean()) {
-			return primitive.getAsBoolean();
-		}
-
-		// NBT has no native boolean tag. JsonOps therefore exposes boolean values
-		// read back from persistent NBT as numeric byte values (0 or 1).
-		if (primitive.isNumber()) {
-			try {
-				int value = primitive.getAsInt();
-				if (value == 0) return false;
-				if (value == 1) return true;
-			} catch (RuntimeException ignored) {
-				// Fall through to the supplied fallback for malformed data.
-			}
-		}
-
-		return fallback;
-	}
-
-	private static long getLong(JsonObject object, String key, long fallback) {
-		if (object == null) {
-			return fallback;
-		}
-		JsonElement element = object.get(key);
-		if (element == null || !element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
-			return fallback;
-		}
-		try {
-			return element.getAsLong();
-		} catch (RuntimeException exception) {
-			return fallback;
-		}
+		return primitive.isBoolean() ? primitive.getAsBoolean() : fallback;
 	}
 
 	private static double getDouble(JsonObject object, String key, double fallback) {
@@ -2246,23 +2238,22 @@ public final class FarmingCropsManager {
 			cropId = "";
 		}
 
-		private JsonObject toJson() {
-			return JSONFormatAPIManager.object()
-				.put(FIELD_LEVEL_ID, levelId)
-				.put(FIELD_SOIL_POS, soilPos)
-				.put(FIELD_CROP_POS, cropPos)
-				.put(FIELD_CROP_ID, cropId)
-				.put(FIELD_FERTILIZED, fertilized)
-				.put(FIELD_FERTILIZED_AT_GAMEPLAY_TICK,
-					fertilizedAtGameplayTick == Long.MIN_VALUE ? -1L : fertilizedAtGameplayTick)
-				.build();
+		private CompoundTag toNbt() {
+			CompoundTag data = new CompoundTag();
+			data.putString(FIELD_LEVEL_ID, levelId);
+			data.putLong(FIELD_SOIL_POS, soilPos);
+			data.putLong(FIELD_CROP_POS, cropPos);
+			data.putString(FIELD_CROP_ID, cropId);
+			data.putBoolean(FIELD_FERTILIZED, fertilized);
+			data.putLong(FIELD_FERTILIZED_AT_GAMEPLAY_TICK,
+				fertilizedAtGameplayTick == Long.MIN_VALUE ? -1L : fertilizedAtGameplayTick);
+			return data;
 		}
 
-		private static PlotState fromJson(JsonElement element) {
-			if (element == null || !element.isJsonObject()) {
+		private static PlotState fromNbt(CompoundTag source) {
+			if (source == null) {
 				return null;
 			}
-			JsonObject source = element.getAsJsonObject();
 			String levelId = getString(source, FIELD_LEVEL_ID, "").trim();
 			if (levelId.isEmpty()) {
 				return null;
@@ -2317,23 +2308,22 @@ public final class FarmingCropsManager {
 			return levelId + "|" + cropPos;
 		}
 
-		private JsonObject toJson() {
-			return JSONFormatAPIManager.object()
-				.put(FIELD_LEVEL_ID, levelId)
-				.put(FIELD_CROP_POS, cropPos)
-				.put(FIELD_SOIL_POS, soilPos)
-				.put(FIELD_CROP_ID, cropId)
-				.put(FIELD_REQUIRED_GROWTH_TICKS, requiredGrowthTicks)
-				.put(FIELD_PROGRESS_GROWTH_TICKS, progressGrowthTicks)
-				.put(FIELD_LAST_PROCESSED_ABSOLUTE_DAY_TIME, lastProcessedAbsoluteDayTime)
-				.build();
+		private CompoundTag toNbt() {
+			CompoundTag data = new CompoundTag();
+			data.putString(FIELD_LEVEL_ID, levelId);
+			data.putLong(FIELD_CROP_POS, cropPos);
+			data.putLong(FIELD_SOIL_POS, soilPos);
+			data.putString(FIELD_CROP_ID, cropId);
+			data.putDouble(FIELD_REQUIRED_GROWTH_TICKS, requiredGrowthTicks);
+			data.putDouble(FIELD_PROGRESS_GROWTH_TICKS, progressGrowthTicks);
+			data.putLong(FIELD_LAST_PROCESSED_ABSOLUTE_DAY_TIME, lastProcessedAbsoluteDayTime);
+			return data;
 		}
 
-		private static CropState fromJson(JsonElement element) {
-			if (element == null || !element.isJsonObject()) {
+		private static CropState fromNbt(CompoundTag source) {
+			if (source == null) {
 				return null;
 			}
-			JsonObject source = element.getAsJsonObject();
 			String levelId = getString(source, FIELD_LEVEL_ID, "").trim();
 			if (levelId.isEmpty()) {
 				return null;
