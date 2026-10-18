@@ -57,10 +57,10 @@ processResources {
 	inputs.property "loader_version", project.loader_version
 	inputs.property "fabric_api_version", project.fabric_api_version
 	filesMatching("fabric.mod.json") {
-		expand "version": project.version,
-			"minecraft_version": project.minecraft_version,
-			"loader_version": project.loader_version,
-			"fabric_api_version": project.fabric_api_version
+		expand "version": inputs.properties.version,
+			"minecraft_version": inputs.properties.minecraft_version,
+			"loader_version": inputs.properties.loader_version,
+			"fabric_api_version": inputs.properties.fabric_api_version
 	}
 }
 
