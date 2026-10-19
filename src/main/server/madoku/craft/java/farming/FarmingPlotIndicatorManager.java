@@ -107,13 +107,14 @@ final class FarmingPlotIndicatorManager {
 				continue;
 			}
 			boolean enteredSyncCell = updateSyncCell(player, serverLevel);
+			List<FarmingCropsManager.PlotIndicatorState> availableStates = FarmingCropsManager.getPlotIndicatorStates(
+				serverLevel,
+				player.blockPosition(),
+				INDICATOR_VIEW_DISTANCE
+			);
 			syncPlayer(
 				player,
-				FarmingCropsManager.getPlotIndicatorStates(
-					serverLevel,
-					player.blockPosition(),
-					INDICATOR_VIEW_DISTANCE
-				),
+				availableStates,
 				forcedResync || enteredSyncCell
 			);
 		}
@@ -292,13 +293,26 @@ final class FarmingPlotIndicatorManager {
 			boolean stateChanged = changed(oldState, state);
 			boolean shouldSend = forceResync || stateChanged;
 			if (shouldSend) {
-				FarmingPlotIndicatorNetworking.send(player, toPayload(state));
+				FarmingPlotIndicatorPayloadManager payload = toPayload(state);
+				FarmingPlotIndicatorNetworking.send(player, payload);
 			}
 			entry.setValue(state);
 		}
 		for (var iterator = previous.entrySet().iterator(); iterator.hasNext();) {
 			Map.Entry<Long, FarmingCropsManager.PlotIndicatorState> entry = iterator.next();
 			if (current.containsKey(entry.getKey())) {
+				continue;
+			}
+			if (FarmingCropsManager.isPlotIndicatorSuppressed(serverLevel, entry.getKey())) {
+				FarmingPlotIndicatorNetworking.send(player, new FarmingPlotIndicatorPayloadManager(
+					entry.getKey(),
+					-1L,
+					0.0F,
+					0.0F,
+					1.0F,
+					true
+				));
+				iterator.remove();
 				continue;
 			}
 			if (FarmingCropsManager.isPlotGrowthComplete(serverLevel, entry.getKey())) {

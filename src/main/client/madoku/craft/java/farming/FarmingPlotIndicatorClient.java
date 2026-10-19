@@ -22,7 +22,7 @@ import net.minecraft.network.chat.FontDescription;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.world.level.ClipContext;
-import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -297,9 +297,11 @@ public final class FarmingPlotIndicatorClient {
 	) {
 		BlockPos soilPos = plot.soilPos();
 		BlockPos cropPos = plot.cropPos();
+		BlockState soilState = level.getBlockState(soilPos);
+		boolean farmingSoil = FarmingSoilRules.isFarmingSoil(soilState);
 		if (!level.getChunkSource().hasChunk(soilPos.getX() >> 4, soilPos.getZ() >> 4)
-			|| !level.getBlockState(soilPos).is(Blocks.FARMLAND)) {
-			return "chunk-not-loaded-or-not-farmland";
+			|| !farmingSoil) {
+			return "chunk-not-loaded-or-not-farming-soil";
 		}
 
 		Vec3 center = new Vec3(soilPos.getX() + 0.5D, soilPos.getY() + 1.0D, soilPos.getZ() + 0.5D);

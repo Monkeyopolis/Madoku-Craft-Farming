@@ -24,6 +24,7 @@ public interface FarmingProvider {
 	default boolean applyExternalGrowthPercent(ServerLevel world, BlockPos cropPos, double growthPercent, String source) { return false; }
 	default boolean isCropPlantItem(ItemStack stack) { return false; }
 	default boolean isFarmland(BlockState state) { return false; }
+	default boolean isFarmingSoil(BlockState state) { return false; }
 	default boolean isManagedCrop(BlockState state) { return false; }
 	default boolean isManagedCrop(ServerLevel world, BlockPos cropPos, BlockState state) { return false; }
 	default boolean isFertilized(ServerLevel world, BlockPos soilPos) { return false; }

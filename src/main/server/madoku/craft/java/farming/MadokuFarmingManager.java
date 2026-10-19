@@ -67,6 +67,7 @@ public final class MadokuFarmingManager {
 
 	public static boolean isCropPlantItem(ItemStack stack) { return FarmingCropsManager.isCropPlantItem(stack); }
 	public static boolean isFarmland(BlockState state) { return FarmingCropsManager.isFarmland(state); }
+	public static boolean isFarmingSoil(BlockState state) { return FarmingCropsManager.isFarmingSoil(state); }
 	public static boolean isManagedCrop(BlockState state) { return FarmingCropsManager.isManagedCrop(state); }
 	public static boolean isManagedCrop(ServerLevel world, BlockPos cropPos, BlockState state) {
 		return FarmingCropsManager.isManagedCrop(world, cropPos, state);

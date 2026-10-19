@@ -55,10 +55,10 @@ public abstract class ItemStackFarmingMixin {
 
 			ServerLevel serverLevel = level instanceof ServerLevel ? (ServerLevel) level : null;
 
-			if (stack.is(Items.BONE_MEAL) && FarmingAPIManager.isFarmland(state)) {
+			if (stack.is(Items.BONE_MEAL) && FarmingAPIManager.isFarmingSoil(state)) {
 				if (serverLevel != null && FarmingAPIManager.isFertilized(serverLevel, pos)) {
 				if (context.getPlayer() != null) {
-						context.getPlayer().sendOverlayMessage(Component.literal("Farmland is already fertilized."));
+						context.getPlayer().sendOverlayMessage(Component.literal("Soil is already fertilized."));
 				}
 				cir.setReturnValue(InteractionResult.FAIL);
 				return;
@@ -128,13 +128,15 @@ public abstract class ItemStackFarmingMixin {
 			return;
 		}
 
-		BlockPos soilPos = madokuCraft$getCropPlantingSoilPos(context);
-		if (soilPos == null || !FarmingAPIManager.isFarmland(level.getBlockState(soilPos))) {
+		BlockPos clickedPos = context.getClickedPos();
+		Direction clickedFace = context.getClickedFace();
+		if (clickedPos == null || clickedFace == null) {
 			madokuCraft$preUseOnCount = -1;
 			return;
 		}
 
-		BlockState cropState = level.getBlockState(soilPos.above());
+		BlockPos cropPos = clickedPos.relative(clickedFace);
+		BlockState cropState = level.getBlockState(cropPos);
 		if (!FarmingAPIManager.isManagedCrop(cropState)) {
 			madokuCraft$preUseOnCount = -1;
 			return;
@@ -143,8 +145,8 @@ public abstract class ItemStackFarmingMixin {
 		// Crop seeds are BlockItems, so Core's generic placement tracker also
 		// records the planted crop. Farming owns these crops and must not let that
 		// marker suppress the configured harvest path.
-		ChunkDataAPIManager.removePlayerPlacedBlock(serverLevel, soilPos.above());
-		FarmingAPIManager.syncPlotFromSoil(serverLevel, soilPos, FarmingAPIManager.isFertilized(serverLevel, soilPos));
+		ChunkDataAPIManager.removePlayerPlacedBlock(serverLevel, cropPos);
+		FarmingAPIManager.trackCrop(serverLevel, cropPos, cropState);
 		madokuCraft$preUseOnCount = -1;
 	}
 

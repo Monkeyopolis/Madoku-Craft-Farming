@@ -36,6 +36,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.TagKey;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.item.Item;
@@ -48,6 +49,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.IntegerProperty;
 import net.minecraft.world.level.block.state.properties.Property;
+import net.minecraft.core.registries.Registries;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -73,7 +75,7 @@ public final class FarmingCropsManager {
 	private static final String LORE_GROWING_TIME_PREFIX = "Growing Time:";
 	private static final String LORE_TEMPERATURE_PREFIX = "Ideal Temperature:";
 	private static final String LORE_HUMIDITY_PREFIX = "Ideal Humidity:";
-	private static final String LORE_FERTILIZER_PREFIX = "Farmland fertilizer.";
+	private static final String LORE_FERTILIZER_PREFIX = "Soil fertilizer.";
 	private static final String LORE_FERTILIZER_EFFECT_PREFIX = "Increases crop growth speed and yield.";
 
 	private static final String DATA_SYSTEM_ID = "farming";
@@ -86,7 +88,7 @@ public final class FarmingCropsManager {
 	private static final String FIELD_CROP_POS = "crop-pos";
 	private static final String FIELD_CROP_ID = "crop-id";
 	private static final String FIELD_FERTILIZED = "fertilized";
-	private static final String FIELD_FERTILIZED_AT_GAMEPLAY_TICK = "fertilized-at-gameplay-tick";
+	private static final String FIELD_FERTILIZED_AT_ABSOLUTE_DAY_TIME = "fertilized-at-absolute-day-time";
 	private static final String FIELD_REQUIRED_GROWTH_TICKS = "required-growth-ticks";
 	private static final String FIELD_PROGRESS_GROWTH_TICKS = "progress-growth-ticks";
 	private static final String FIELD_LAST_PROCESSED_ABSOLUTE_DAY_TIME = "last-processed-absolute-day-time";
@@ -131,7 +133,7 @@ public final class FarmingCropsManager {
 		@Override public void onChunkLoaded(ServerLevel level, int chunkX, int chunkZ) {
 			loadChunkData(level, chunkX, chunkZ);
 			processCropsInChunk(level, chunkX, chunkZ);
-		}
+	}
 
 		@Override public void onChunkUnloaded(ServerLevel level, int chunkX, int chunkZ) {
 			saveChunkData(level, chunkX, chunkZ);
@@ -308,7 +310,8 @@ public final class FarmingCropsManager {
 		}
 
 		trackCrop(world, cropPos, state);
-		CropState crop = cropsByKey.get(cropKey(world, cropPos));
+		BlockPos trackedCropPos = resolveTrackedCropPosition(world, cropPos, rule);
+		CropState crop = cropsByKey.get(cropKey(world, trackedCropPos));
 		if (crop == null) {
 			return false;
 		}
@@ -327,7 +330,7 @@ public final class FarmingCropsManager {
 		crop.progressGrowthTicks = updated;
 		crop.lastProcessedAbsoluteDayTime = Math.max(crop.lastProcessedAbsoluteDayTime, resolveAbsoluteDayTime(world));
 		dirty = true;
-		updateCropBlockAge(world, cropPos, world.getBlockState(cropPos), rule, crop);
+		updateCropBlockAge(world, trackedCropPos, world.getBlockState(trackedCropPos), rule, crop, null);
 		scheduleCropDue(world, crop);
 
 		return true;
@@ -337,8 +340,181 @@ public final class FarmingCropsManager {
 		return resolveCropRuleByPlantingItem(stack) != null;
 	}
 
+	private static boolean isVerticalCrop(CropRule rule) {
+		return rule != null && rule.maxHeight() > 1;
+	}
+
+	private static BlockPos resolveCropBasePosition(ServerLevel world, BlockPos cropPos, CropRule rule) {
+		if (world == null || cropPos == null || !isVerticalCrop(rule)) {
+			return cropPos;
+		}
+
+		BlockPos base = cropPos;
+		// A managed vertical crop can never be taller than its configured maximum.
+		// Bound this search so manually stacked columns cannot turn random-tick or
+		// tracking work into an unbounded downward scan.
+		int maximumBaseSearchSteps = Math.max(0, rule.maxHeight() - 1);
+		for (int step = 0; step < maximumBaseSearchSteps; step++) {
+			BlockPos below = base.below();
+			if (!isCropBlock(world.getBlockState(below), rule)) {
+				break;
+			}
+			base = below;
+		}
+		return base;
+	}
+
+	private static BlockPos resolveTrackedCropPosition(ServerLevel world, BlockPos cropPos, CropRule rule) {
+		return resolveCropBasePosition(world, cropPos, rule);
+	}
+
+	private static boolean isCropSupport(ServerLevel world, BlockPos cropPos, CropRule rule) {
+		if (world == null || cropPos == null || rule == null) {
+			return false;
+		}
+		if (isVerticalCrop(rule)) {
+			BlockPos basePos = resolveCropBasePosition(world, cropPos, rule);
+			BlockState cropState = world.getBlockState(basePos);
+			return isCropBlock(cropState, rule)
+				&& cropState.canSurvive(world, basePos)
+				&& matchesCropSupport(world.getBlockState(basePos.below()), rule);
+		}
+		return matchesCropSupport(world.getBlockState(cropPos.below()), rule);
+	}
+
+	private static boolean matchesCropSupport(BlockState supportState, CropRule rule) {
+		if (supportState == null || rule == null) {
+			return false;
+		}
+		if (rule.supportBlocks().contains(supportState.getBlock())) {
+			return true;
+		}
+		for (TagKey<Block> supportTag : rule.supportTags()) {
+			if (supportState.is(supportTag)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static int getVerticalCropHeight(ServerLevel world, BlockPos basePos, CropRule rule) {
+		if (world == null || basePos == null || !isVerticalCrop(rule)) {
+			return 1;
+		}
+
+		int height = 0;
+		int maxHeight = Math.max(1, rule.maxHeight());
+		while (height < maxHeight && isCropBlock(world.getBlockState(basePos.above(height)), rule)) {
+			height++;
+		}
+		return Math.max(1, height);
+	}
+
+	private static VerticalCropGeometry resolveVerticalCropGeometry(
+		ServerLevel world,
+		BlockPos cropPos,
+		CropRule rule
+	) {
+		if (world == null || cropPos == null || !isVerticalCrop(rule)) {
+			return null;
+		}
+
+		BlockPos basePos = resolveCropBasePosition(world, cropPos, rule);
+		int currentHeight = getVerticalCropHeight(world, basePos, rule);
+		boolean growthBlocked = currentHeight < rule.maxHeight()
+			&& !world.getBlockState(basePos.above(currentHeight)).isAir();
+		return new VerticalCropGeometry(basePos, currentHeight, growthBlocked);
+	}
+
+	private static double progressFromCropState(
+		ServerLevel world,
+		BlockPos cropPos,
+		BlockState state,
+		CropRule rule,
+		double requiredTicks
+	) {
+		return progressFromCropState(
+			world,
+			cropPos,
+			state,
+			rule,
+			requiredTicks,
+			isVerticalCrop(rule) ? resolveVerticalCropGeometry(world, cropPos, rule) : null
+		);
+	}
+
+	private static double progressFromCropState(
+		ServerLevel world,
+		BlockPos cropPos,
+		BlockState state,
+		CropRule rule,
+		double requiredTicks,
+		VerticalCropGeometry geometry
+	) {
+		if (isVerticalCrop(rule)) {
+			VerticalCropGeometry safeGeometry = geometry == null
+				? resolveVerticalCropGeometry(world, cropPos, rule)
+				: geometry;
+			int height = safeGeometry == null ? 1 : safeGeometry.height();
+			int maxHeight = Math.max(2, rule.maxHeight());
+			return ((height - 1) / (double) (maxHeight - 1)) * requiredTicks;
+		}
+
+		int ageLimit = Math.max(1, getCropAgeLimit(state));
+		return progressFromAge(
+			isCropMatureBlock(state, rule) ? ageLimit : getCropAge(state),
+			ageLimit
+		) * requiredTicks;
+	}
+
+	private static int verticalHeightFromProgress(double progressNormalized, CropRule rule) {
+		int maxHeight = Math.max(1, rule == null ? 1 : rule.maxHeight());
+		if (maxHeight <= 1) {
+			return 1;
+		}
+		double safeProgress = Math.max(0.0d, Math.min(1.0d, progressNormalized));
+		return Math.max(1, Math.min(maxHeight, 1 + (int) Math.floor(safeProgress * (maxHeight - 1) + 1.0e-9d)));
+	}
+
+	private static boolean isCropGrowthComplete(ServerLevel world, BlockPos cropPos, BlockState state, CropRule rule, CropState crop) {
+		return isCropGrowthComplete(
+			world,
+			cropPos,
+			state,
+			rule,
+			crop,
+			isVerticalCrop(rule) ? resolveVerticalCropGeometry(world, cropPos, rule) : null
+		);
+	}
+
+	private static boolean isCropGrowthComplete(
+		ServerLevel world,
+		BlockPos cropPos,
+		BlockState state,
+		CropRule rule,
+		CropState crop,
+		VerticalCropGeometry geometry
+	) {
+		if (isVerticalCrop(rule)) {
+			VerticalCropGeometry safeGeometry = geometry == null
+				? resolveVerticalCropGeometry(world, cropPos, rule)
+				: geometry;
+			return safeGeometry != null
+				&& safeGeometry.height() >= rule.maxHeight()
+				&& crop != null
+				&& crop.progressGrowthTicks + CROP_DUE_EPSILON >= Math.max(1.0d, crop.requiredGrowthTicks);
+		}
+		return (state != null && (isCropMatureBlock(state, rule) || isMaxAge(state)))
+			|| (crop != null && crop.progressGrowthTicks + CROP_DUE_EPSILON >= Math.max(1.0d, crop.requiredGrowthTicks));
+	}
+
 	public static boolean isFarmland(BlockState state) {
 		return state != null && state.getBlock() == Blocks.FARMLAND;
+	}
+
+	/** Returns whether a block can hold a farming plot or fertilizer state. */
+	public static boolean isFarmingSoil(BlockState state) {
+		return FarmingSoilRules.isFarmingSoil(state);
 	}
 
 	private static boolean isDryFarmland(BlockState state) {
@@ -370,12 +546,12 @@ public final class FarmingCropsManager {
 
 	public static boolean isFertilized(ServerLevel world, BlockPos soilPos) {
 		PlotState plot = findPlot(world, soilPos);
-		return plot != null && plot.fertilized;
+		return isPlotFertilized(world, plot);
 	}
 
 	public static boolean isManagedPlot(ServerLevel world, BlockPos soilPos) {
 		PlotState plot = findPlot(world, soilPos);
-		return plot != null && (plot.fertilized || plot.hasCrop());
+		return plot != null && (isPlotFertilized(world, plot) || plot.hasCrop());
 	}
 
 	static boolean isPlotGrowthComplete(ServerLevel world, long soilPos) {
@@ -398,7 +574,7 @@ public final class FarmingCropsManager {
 
 		BlockPos cropPos = BlockPos.of(crop.cropPos);
 		BlockState cropState = world.getBlockState(cropPos);
-		if (isCropMatureBlock(cropState, rule) || isMaxAge(cropState)) {
+		if (isCropGrowthComplete(world, cropPos, cropState, rule, crop)) {
 			return true;
 		}
 
@@ -471,16 +647,24 @@ public final class FarmingCropsManager {
 					BlockPos cropPos = BlockPos.of(plot.cropPos);
 					CropRule rule = resolveCropRuleByPlantingItemId(crop.cropId);
 					BlockState cropState = world.getBlockState(cropPos);
-					if (rule == null
-						|| (!isCropBlock(cropState, rule) && !isCropMatureBlock(cropState, rule))
-						|| !isFarmland(world.getBlockState(soilPos))) {
+					boolean validCropState = rule != null
+						&& (isCropBlock(cropState, rule) || isCropMatureBlock(cropState, rule));
+					boolean validSoilState = rule != null && isCropSupport(world, cropPos, rule);
+					if (!validCropState || !validSoilState) {
+						continue;
+					}
+
+					VerticalCropGeometry geometry = isVerticalCrop(rule)
+						? resolveVerticalCropGeometry(world, cropPos, rule)
+						: null;
+					if (geometry != null && geometry.growthBlocked()) {
 						continue;
 					}
 
 					double requiredGrowthTicks = Math.max(1.0d, crop.requiredGrowthTicks);
 					double progressGrowthTicks = Math.max(0.0d,
 						Math.min(requiredGrowthTicks, crop.progressGrowthTicks));
-					double growthSpeedMultiplier = resolveGrowthSpeedMultiplier(rule, world, cropPos);
+					double growthSpeedMultiplier = resolveGrowthSpeedMultiplier(rule, world, cropPos, geometry);
 					long previousAbsoluteDayTime = normalizePreviousAbsoluteTick(
 						crop.lastProcessedAbsoluteDayTime,
 						currentAbsoluteDayTime
@@ -509,6 +693,26 @@ public final class FarmingCropsManager {
 		return indicators;
 	}
 
+	static boolean isPlotIndicatorSuppressed(ServerLevel world, long soilPos) {
+		if (!settings.enabled || world == null) {
+			return false;
+		}
+		PlotState plot = plotsByKey.get(levelId(world) + "|" + soilPos);
+		if (plot == null || !plot.hasCrop()) {
+			return false;
+		}
+		CropState crop = cropsByKey.get(plot.levelId + "|" + plot.cropPos);
+		if (crop == null) {
+			return false;
+		}
+		CropRule rule = resolveCropRuleByPlantingItemId(crop.cropId);
+		if (!isVerticalCrop(rule)) {
+			return false;
+		}
+		VerticalCropGeometry geometry = resolveVerticalCropGeometry(world, BlockPos.of(crop.cropPos), rule);
+		return geometry != null && geometry.growthBlocked();
+	}
+
 	public record PlotIndicatorState(
 		long soilPos,
 		long cropPos,
@@ -528,7 +732,8 @@ public final class FarmingCropsManager {
 			return;
 		}
 
-		if (!isFarmland(world.getBlockState(soilPos))) {
+		BlockState soilState = world.getBlockState(soilPos);
+		if (!isFarmingSoil(soilState)) {
 			return;
 		}
 
@@ -537,10 +742,14 @@ public final class FarmingCropsManager {
 			return;
 		}
 
-		long gameplayTick = TimeAPIManager.getGameplayTicks();
+		isPlotFertilized(world, plot);
+		if (findPlot(world, soilPos) == null) {
+			plot = getOrCreatePlot(world, soilPos);
+		}
+		long currentAbsoluteDayTime = resolveAbsoluteDayTime(world);
 		if (!plot.fertilized) {
 			plot.fertilized = true;
-			plot.fertilizedAtGameplayTick = gameplayTick;
+			plot.fertilizedAtAbsoluteDayTime = currentAbsoluteDayTime;
 			dirty = true;
 		}
 		emitFertilizedParticles(world, soilPos);
@@ -552,7 +761,7 @@ public final class FarmingCropsManager {
 		}
 
 		PlotState plot = findPlot(world, soilPos);
-		if (plot != null && plot.fertilized) {
+		if (plot != null && isPlotFertilized(world, plot)) {
 			emitFertilizedParticles(world, soilPos);
 		}
 	}
@@ -563,7 +772,7 @@ public final class FarmingCropsManager {
 		}
 
 		BlockState soilState = world.getBlockState(soilPos);
-		if (!isFarmland(soilState)) {
+		if (!isFarmingSoil(soilState)) {
 			removePlot(world, soilPos);
 			return;
 		}
@@ -580,10 +789,14 @@ public final class FarmingCropsManager {
 			return;
 		}
 
+		isPlotFertilized(world, plot);
+		if (findPlot(world, soilPos) == null) {
+			plot = getOrCreatePlot(world, soilPos);
+		}
 		boolean changed = false;
 		if (fertilized && !plot.fertilized) {
 			plot.fertilized = true;
-			plot.fertilizedAtGameplayTick = TimeAPIManager.getGameplayTicks();
+			plot.fertilizedAtAbsoluteDayTime = resolveAbsoluteDayTime(world);
 			changed = true;
 		}
 
@@ -618,13 +831,9 @@ public final class FarmingCropsManager {
 			return;
 		}
 
-		if (!isFarmland(world.getBlockState(soilPos))) {
-			return;
-		}
-
 		BlockPos cropPos = soilPos.above();
 		BlockState cropState = world.getBlockState(cropPos);
-		if (!isCropBlock(cropState, rule)) {
+		if (!isCropBlock(cropState, rule) || !isCropSupport(world, cropPos, rule)) {
 			return;
 		}
 
@@ -640,25 +849,27 @@ public final class FarmingCropsManager {
 		if (rule == null) {
 			return;
 		}
-		LOADED_CHUNK_KEYS.add(cropChunkKey(world, cropPos.getX() >> 4, cropPos.getZ() >> 4));
+		BlockPos trackedCropPos = resolveCropBasePosition(world, cropPos, rule);
+		BlockState trackedCropState = world.getBlockState(trackedCropPos);
+		if (!isCropBlock(trackedCropState, rule) || !isCropSupport(world, trackedCropPos, rule)) {
+			return;
+		}
+		LOADED_CHUNK_KEYS.add(cropChunkKey(world, trackedCropPos.getX() >> 4, trackedCropPos.getZ() >> 4));
 		// A mature pumpkin/melon placed as a block is not a farming harvest.
 		// Do not let a farmland scan turn it into tracked crop state.
-		if (isCropMatureBlock(cropState, rule)
-			&& ChunkDataAPIManager.isPlayerPlacedBlock(world, cropPos)) {
+		if (isCropMatureBlock(trackedCropState, rule)
+			&& ChunkDataAPIManager.isPlayerPlacedBlock(world, trackedCropPos)) {
 			return;
 		}
 
-		BlockPos soilPos = cropPos.below();
-		if (!isFarmland(world.getBlockState(soilPos))) {
-			return;
-		}
+		BlockPos soilPos = trackedCropPos.below();
 
 		PlotState plot = getOrCreatePlot(world, soilPos);
 		if (plot == null) {
 			return;
 		}
 
-		String cropKey = cropKey(world, cropPos);
+		String cropKey = cropKey(world, trackedCropPos);
 		long nowAbsoluteDayTime = resolveAbsoluteDayTime(world);
 		double requiredGrowthTicks = resolveCropRequiredGrowthTicks(rule);
 		CropState existing = cropsByKey.get(cropKey);
@@ -667,10 +878,7 @@ public final class FarmingCropsManager {
 		double progressBasisTicks = (existing != null && !cropTypeChanged)
 			? Math.max(1.0d, existing.requiredGrowthTicks)
 			: requiredGrowthTicks;
-		double progressFromState = progressFromAge(
-			isCropMatureBlock(cropState, rule) ? getCropAgeLimit(cropState) : getCropAge(cropState),
-			getCropAgeLimit(cropState)
-		) * progressBasisTicks;
+		double progressFromState = progressFromCropState(world, trackedCropPos, trackedCropState, rule, progressBasisTicks);
 
 		if (existing == null) {
 			existing = new CropState(
@@ -693,11 +901,15 @@ public final class FarmingCropsManager {
 			} else {
 				double safeRequired = Math.max(1.0d, existing.requiredGrowthTicks);
 				double cappedExistingProgress = Math.max(0.0d, Math.min(safeRequired, existing.progressGrowthTicks));
-				int ageLimit = Math.max(1, getCropAgeLimit(cropState));
-				double oneAgeStepTicks = safeRequired / ageLimit;
-				boolean visiblyRegressed = !isCropMatureBlock(cropState, rule)
-					&& !isMaxAge(cropState)
-					&& progressFromState + Math.max(1.0d, oneAgeStepTicks) < cappedExistingProgress;
+				int growthStages = isVerticalCrop(rule)
+					? Math.max(1, rule.maxHeight() - 1)
+					: Math.max(1, getCropAgeLimit(trackedCropState));
+				double oneGrowthStageTicks = safeRequired / growthStages;
+				boolean visiblyComplete = isVerticalCrop(rule)
+					? getVerticalCropHeight(world, trackedCropPos, rule) >= rule.maxHeight()
+					: isCropMatureBlock(trackedCropState, rule) || isMaxAge(trackedCropState);
+				boolean visiblyRegressed = !visiblyComplete
+					&& progressFromState + Math.max(1.0d, oneGrowthStageTicks) < cappedExistingProgress;
 				if (visiblyRegressed) {
 					scheduleDue = true;
 					// Replanting at the same position can reuse the previous crop key.
@@ -711,14 +923,17 @@ public final class FarmingCropsManager {
 			}
 		}
 
-		if (isCropMatureBlock(cropState, rule) || isMaxAge(cropState)) {
+		boolean visiblyComplete = isVerticalCrop(rule)
+			? getVerticalCropHeight(world, trackedCropPos, rule) >= rule.maxHeight()
+			: isCropMatureBlock(trackedCropState, rule) || isMaxAge(trackedCropState);
+		if (visiblyComplete) {
 			existing.progressGrowthTicks = existing.requiredGrowthTicks;
 		}
 
 		if (scheduleDue) {
 			scheduleCropDue(world, existing);
 		}
-		plot.cropPos = cropPos.asLong();
+		plot.cropPos = trackedCropPos.asLong();
 		plot.cropId = rule.plantingItemId();
 		dirty = true;
 	}
@@ -739,8 +954,7 @@ public final class FarmingCropsManager {
 		}
 
 		CropRule rule = resolveCropRuleByCropState(cropState);
-		BlockState soilState = world.getBlockState(cropPos.below());
-		if (rule == null || !isCropBlock(cropState, rule) || !isFarmland(soilState)) {
+		if (rule == null || !isCropBlock(cropState, rule) || !isCropSupport(world, cropPos, rule)) {
 			return false;
 		}
 
@@ -775,9 +989,8 @@ public final class FarmingCropsManager {
 
 			BlockPos cropPos = BlockPos.of(crop.cropPos);
 			BlockState cropState = world.getBlockState(cropPos);
-			BlockState soilState = world.getBlockState(cropPos.below());
 			CropRule rule = resolveCropRuleByCropState(cropState);
-			if (rule == null || !isCropBlock(cropState, rule) || !isFarmland(soilState)) {
+			if (rule == null || !isCropBlock(cropState, rule) || !isCropSupport(world, cropPos, rule)) {
 				staleKeys.add(key);
 				continue;
 			}
@@ -859,9 +1072,8 @@ public final class FarmingCropsManager {
 
 			BlockPos cropPos = BlockPos.of(crop.cropPos);
 			BlockState cropState = world.getBlockState(cropPos);
-			BlockState soilState = world.getBlockState(cropPos.below());
 			CropRule rule = resolveCropRuleByPlantingItemId(crop.cropId);
-			if (rule == null || !isCropBlock(cropState, rule) || !isFarmland(soilState)) {
+			if (rule == null || !isCropBlock(cropState, rule) || !isCropSupport(world, cropPos, rule)) {
 				FarmingPlotIndicatorManager.invalidatePlot(world, crop.soilPos);
 				if (removeCropStateByKey(crop.key()) != null) {
 					dirty = true;
@@ -934,15 +1146,21 @@ public final class FarmingCropsManager {
 		}
 		double requiredTicks = Math.max(1.0d, crop.requiredGrowthTicks);
 		double progress = Math.max(0.0d, Math.min(requiredTicks, crop.progressGrowthTicks));
-		if (progress + CROP_DUE_EPSILON >= requiredTicks) {
-			return Double.POSITIVE_INFINITY;
-		}
 
 		CropRule rule = resolveCropRuleByPlantingItemId(crop.cropId);
 		if (rule == null) {
 			return Double.POSITIVE_INFINITY;
 		}
-		double speedMultiplier = resolveGrowthSpeedMultiplier(rule, world, BlockPos.of(crop.cropPos));
+		BlockPos cropPos = BlockPos.of(crop.cropPos);
+		VerticalCropGeometry geometry = isVerticalCrop(rule)
+			? resolveVerticalCropGeometry(world, cropPos, rule)
+			: null;
+		if (progress + CROP_DUE_EPSILON >= requiredTicks
+			&& (geometry == null || !geometry.growthBlocked())) {
+			return Double.POSITIVE_INFINITY;
+		}
+
+		double speedMultiplier = resolveGrowthSpeedMultiplier(rule, world, cropPos, geometry);
 		long baseline = Math.max(0L, crop.lastProcessedAbsoluteDayTime);
 		if (!(speedMultiplier > 0.0d)) {
 			return Math.max(currentAbsoluteDayTime, baseline) + ZERO_SPEED_RECHECK_INTERVAL_TICKS;
@@ -1126,18 +1344,24 @@ public final class FarmingCropsManager {
 		double requiredTicks = Math.max(1.0d, crop.requiredGrowthTicks);
 		crop.requiredGrowthTicks = requiredTicks;
 		int ageLimit = Math.max(1, getCropAgeLimit(state));
-		boolean observedMature = isCropMatureBlock(state, rule) || isMaxAge(state);
+		VerticalCropGeometry geometry = isVerticalCrop(rule)
+			? resolveVerticalCropGeometry(world, cropPos, rule)
+			: null;
+		boolean observedMature = geometry != null
+			? geometry.height() >= rule.maxHeight()
+			: isCropMatureBlock(state, rule) || isMaxAge(state);
 		boolean wasGrowthComplete = observedMature
-			|| crop.progressGrowthTicks + CROP_DUE_EPSILON >= requiredTicks;
-		int observedAge = isCropMatureBlock(state, rule) ? ageLimit : getCropAge(state);
-		double observedProgress = progressFromAge(observedAge, ageLimit) * requiredTicks;
+			&& crop.progressGrowthTicks + CROP_DUE_EPSILON >= requiredTicks;
+		double observedProgress = progressFromCropState(world, cropPos, state, rule, requiredTicks, geometry);
 		double cappedTrackedProgress = Math.max(0.0d, Math.min(requiredTicks, crop.progressGrowthTicks));
-		double oneAgeStepTicks = requiredTicks / ageLimit;
-		if (!observedMature && observedProgress + Math.max(1.0d, oneAgeStepTicks) < cappedTrackedProgress) {
+		double oneGrowthStageTicks = requiredTicks / (isVerticalCrop(rule)
+			? Math.max(1, rule.maxHeight() - 1)
+			: ageLimit);
+		if (!observedMature && observedProgress + Math.max(1.0d, oneGrowthStageTicks) < cappedTrackedProgress) {
 			crop.progressGrowthTicks = Math.max(0.0d, Math.min(requiredTicks, observedProgress));
 		}
 
-		double speedMultiplier = resolveGrowthSpeedMultiplier(rule, world, cropPos);
+		double speedMultiplier = resolveGrowthSpeedMultiplier(rule, world, cropPos, geometry);
 
 		long rawPreviousAbsolute = Math.max(0L, crop.lastProcessedAbsoluteDayTime);
 		long previousAbsolute = normalizePreviousAbsoluteTick(crop.lastProcessedAbsoluteDayTime, currentAbsoluteDayTime);
@@ -1156,20 +1380,15 @@ public final class FarmingCropsManager {
 		}
 		crop.lastProcessedAbsoluteDayTime = safeCurrentAbsolute;
 
-		double observedProgressFromState = progressFromAge(
-			isCropMatureBlock(state, rule) ? ageLimit : getCropAge(state),
-			ageLimit
-		) * requiredTicks;
+		double observedProgressFromState = observedProgress;
 		if (observedProgressFromState > crop.progressGrowthTicks) {
 			crop.progressGrowthTicks = Math.min(requiredTicks, observedProgressFromState);
 			dirty = true;
 		}
 
-		updateCropBlockAge(world, cropPos, state, rule, crop);
+		VerticalCropGeometry updatedGeometry = updateCropBlockAge(world, cropPos, state, rule, crop, geometry);
 		BlockState updatedState = world.getBlockState(cropPos);
-		boolean isGrowthComplete = isCropMatureBlock(updatedState, rule)
-			|| isMaxAge(updatedState)
-			|| crop.progressGrowthTicks + CROP_DUE_EPSILON >= requiredTicks;
+		boolean isGrowthComplete = isCropGrowthComplete(world, cropPos, updatedState, rule, crop, updatedGeometry);
 		if (!wasGrowthComplete && isGrowthComplete) {
 			FarmingPlotIndicatorManager.invalidatePlot(world, crop.soilPos);
 		}
@@ -1177,6 +1396,31 @@ public final class FarmingCropsManager {
 
 	public static void handleBlockBreak(Level world, BlockPos pos, BlockState state, BlockEntity blockEntity) {
 		if (!settings.enabled || !(world instanceof ServerLevel serverLevel) || pos == null) {
+			return;
+		}
+
+		CropRule brokenRule = resolveCropRuleByCropState(state);
+		if (isVerticalCrop(brokenRule)) {
+			BlockPos trackedCropPos = resolveCropBasePosition(serverLevel, pos, brokenRule);
+			String trackedCropKey = cropKey(serverLevel, trackedCropPos);
+			CropState removed = removeCropStateByKey(trackedCropKey);
+			pendingHarvestRulesByKey.remove(trackedCropKey);
+			BlockState remainingBaseState = serverLevel.getBlockState(trackedCropPos);
+			if (isCropBlock(remainingBaseState, brokenRule) && isCropSupport(serverLevel, trackedCropPos, brokenRule)) {
+				trackCrop(serverLevel, trackedCropPos, remainingBaseState);
+				FarmingPlotIndicatorManager.invalidatePlot(serverLevel, trackedCropPos.below().asLong());
+			} else if (removed != null) {
+				FarmingPlotIndicatorManager.invalidatePlot(serverLevel, removed.soilPos);
+				PlotState soilPlot = findPlot(serverLevel, BlockPos.of(removed.soilPos));
+				if (soilPlot != null && soilPlot.cropPos == trackedCropPos.asLong()) {
+					boolean fertilizerActive = isPlotFertilized(serverLevel, soilPlot);
+					soilPlot.clearCrop();
+					if (!fertilizerActive) {
+						removePlotStateByKey(soilPlot.key());
+					}
+				}
+			}
+			dirty = removed != null || isCropBlock(remainingBaseState, brokenRule);
 			return;
 		}
 
@@ -1194,8 +1438,9 @@ public final class FarmingCropsManager {
 			FarmingPlotIndicatorManager.invalidatePlot(serverLevel, cropState.soilPos);
 			PlotState soilPlot = findPlot(serverLevel, BlockPos.of(cropState.soilPos));
 			if (soilPlot != null && soilPlot.cropPos == pos.asLong()) {
+				boolean fertilizerActive = isPlotFertilized(serverLevel, soilPlot);
 				soilPlot.clearCrop();
-				if (!soilPlot.fertilized) {
+				if (!fertilizerActive) {
 					removePlotStateByKey(soilPlot.key());
 				}
 			}
@@ -1255,7 +1500,7 @@ public final class FarmingCropsManager {
 		}
 
 		CropState tracked = findCrop(world, cropPos);
-		return tracked != null && tracked.progressGrowthTicks + 1e-6d >= tracked.requiredGrowthTicks;
+		return tracked != null && isCropGrowthComplete(world, cropPos, state, rule, tracked);
 	}
 
 	public static boolean isManagedHarvestState(ServerLevel world, BlockPos cropPos, BlockState state) {
@@ -1271,7 +1516,7 @@ public final class FarmingCropsManager {
 		if (rule == null || !isCropHarvestReady(world, cropPos, state)) {
 			return false;
 		}
-		return !rule.usesDistinctMatureBlock() || isCropMatureBlock(state, rule);
+		return isVerticalCrop(rule) || !rule.usesDistinctMatureBlock() || isCropMatureBlock(state, rule);
 	}
 
 
@@ -1312,7 +1557,8 @@ public final class FarmingCropsManager {
 			return;
 		}
 
-		boolean fertilized = isFertilized(world, cropPos.below());
+		CropState tracked = findCrop(world, cropPos);
+		boolean fertilized = tracked != null && isFertilized(world, BlockPos.of(tracked.soilPos));
 		markPendingHarvest(world, cropPos, rule, fertilized);
 	}
 
@@ -1326,16 +1572,19 @@ public final class FarmingCropsManager {
 			return;
 		}
 
-		pendingHarvestRulesByKey.remove(cropKey(world, cropPos));
-		CropState removed = removeCropStateByKey(cropKey(world, cropPos));
-		BlockPos soilPos = removed == null ? cropPos.below() : BlockPos.of(removed.soilPos);
+		BlockPos trackedCropPos = resolveTrackedCropPosition(world, cropPos, rule);
+		String trackedCropKey = cropKey(world, trackedCropPos);
+		pendingHarvestRulesByKey.remove(trackedCropKey);
+		CropState removed = removeCropStateByKey(trackedCropKey);
+		BlockPos soilPos = removed == null ? trackedCropPos.below() : BlockPos.of(removed.soilPos);
 		FarmingPlotIndicatorManager.invalidatePlot(world, soilPos.asLong());
 		PlotState plot = findPlot(world, soilPos);
 		if (plot != null && (!plot.hasCrop() || plot.cropPos == cropPos.asLong() || removed != null)) {
+			boolean fertilizerActive = isPlotFertilized(world, plot);
 			plot.clearCrop();
-			plot.fertilized = false;
-			plot.fertilizedAtGameplayTick = Long.MIN_VALUE;
-			removePlotStateByKey(plot.key());
+			if (!fertilizerActive) {
+				removePlotStateByKey(plot.key());
+			}
 		}
 		dirty = true;
 	}
@@ -1356,13 +1605,53 @@ public final class FarmingCropsManager {
 		return true;
 	}
 
-	private static void updateCropBlockAge(ServerLevel world, BlockPos cropPos, BlockState state, CropRule rule, CropState crop) {
+	private static VerticalCropGeometry updateCropBlockAge(
+		ServerLevel world,
+		BlockPos cropPos,
+		BlockState state,
+		CropRule rule,
+		CropState crop,
+		VerticalCropGeometry geometry
+	) {
 		if (world == null || cropPos == null || state == null || rule == null || crop == null) {
-			return;
+			return geometry;
 		}
 
 		double required = Math.max(1.0d, crop.requiredGrowthTicks);
 		double progress = Math.max(0.0d, Math.min(required, crop.progressGrowthTicks));
+		if (isVerticalCrop(rule)) {
+			VerticalCropGeometry safeGeometry = geometry == null
+				? resolveVerticalCropGeometry(world, cropPos, rule)
+				: geometry;
+			BlockPos basePos = safeGeometry == null ? cropPos : safeGeometry.basePos();
+			int currentHeight = safeGeometry == null ? getVerticalCropHeight(world, basePos, rule) : safeGeometry.height();
+			int targetHeight = verticalHeightFromProgress(progress / required, rule);
+			Block cropBlock = resolveBlockByRegistryId(rule.cropBlockId());
+			if (cropBlock == null) {
+				return safeGeometry;
+			}
+
+			int finalHeight = currentHeight;
+			for (int height = currentHeight; height < targetHeight; height++) {
+				BlockPos nextPos = basePos.above(height);
+				BlockState nextState = world.getBlockState(nextPos);
+				if (!nextState.isAir()) {
+					break;
+				}
+				world.setBlockAndUpdate(nextPos, cropBlock.defaultBlockState());
+				dirty = true;
+				finalHeight = height + 1;
+			}
+			if (finalHeight >= rule.maxHeight()) {
+				crop.progressGrowthTicks = required;
+			}
+			return new VerticalCropGeometry(
+				basePos,
+				finalHeight,
+				finalHeight < rule.maxHeight() && !world.getBlockState(basePos.above(finalHeight)).isAir()
+			);
+		}
+
 		int ageLimit = getCropAgeLimit(state);
 		int targetAge = ageFromProgress(progress / required, ageLimit);
 
@@ -1376,7 +1665,7 @@ public final class FarmingCropsManager {
 					dirty = true;
 				}
 				crop.progressGrowthTicks = required;
-				return;
+				return null;
 			}
 			if (isCropGrowthBlock(state, rule) && targetAge > getCropAge(state)) {
 				BlockState updated = setCropAge(state, targetAge);
@@ -1385,7 +1674,7 @@ public final class FarmingCropsManager {
 					dirty = true;
 				}
 			}
-			return;
+			return null;
 		}
 
 		if (targetAge > getCropAge(state)) {
@@ -1398,6 +1687,7 @@ public final class FarmingCropsManager {
 		if (targetAge >= ageLimit) {
 			crop.progressGrowthTicks = required;
 		}
+		return null;
 	}
 
 	private static String levelId(ServerLevel world) {
@@ -1412,6 +1702,35 @@ public final class FarmingCropsManager {
 			return null;
 		}
 		return plotsByKey.get(plotKey(world, soilPos));
+	}
+
+	private static boolean isPlotFertilized(ServerLevel world, PlotState plot) {
+		long currentAbsoluteDayTime = resolveAbsoluteDayTime(world);
+		long durationTicks = resolveFertilizerDurationTicks();
+		if (plot == null || !plot.fertilized) {
+			return false;
+		}
+
+		long elapsedTicks = currentAbsoluteDayTime - plot.fertilizedAtAbsoluteDayTime;
+		if (currentAbsoluteDayTime < plot.fertilizedAtAbsoluteDayTime) {
+			plot.fertilizedAtAbsoluteDayTime = currentAbsoluteDayTime;
+			dirty = true;
+			return true;
+		}
+		if (durationTicks > 0L && elapsedTicks < durationTicks) {
+			return true;
+		}
+
+		plot.fertilized = false;
+		plot.fertilizedAtAbsoluteDayTime = Long.MIN_VALUE;
+		dirty = true;
+		if (world != null) {
+			FarmingPlotIndicatorManager.invalidatePlot(world, plot.soilPos);
+		}
+		if (!plot.hasCrop()) {
+			removePlotStateByKey(plot.key());
+		}
+		return false;
 	}
 
 	private static PlotState getOrCreatePlot(ServerLevel world, BlockPos soilPos) {
@@ -1451,7 +1770,13 @@ public final class FarmingCropsManager {
 		if (world == null || cropPos == null) {
 			return null;
 		}
-		return cropsByKey.get(cropKey(world, cropPos));
+		CropState direct = cropsByKey.get(cropKey(world, cropPos));
+		if (direct != null) {
+			return direct;
+		}
+		CropRule rule = resolveCropRuleByCropState(world.getBlockState(cropPos));
+		BlockPos trackedCropPos = resolveTrackedCropPosition(world, cropPos, rule);
+		return cropsByKey.get(cropKey(world, trackedCropPos));
 	}
 
 	private static PlotState putPlotState(String key, PlotState value) {
@@ -1876,13 +2201,20 @@ public final class FarmingCropsManager {
 		if (world == null || cropPos == null) {
 			return null;
 		}
-		PendingHarvestRule pending = pendingHarvestRulesByKey.get(cropKey(world, cropPos));
+		String directKey = cropKey(world, cropPos);
+		PendingHarvestRule pending = pendingHarvestRulesByKey.get(directKey);
+		if (pending == null) {
+			CropRule stateRule = resolveCropRuleByCropState(world.getBlockState(cropPos));
+			String trackedKey = cropKey(world, resolveTrackedCropPosition(world, cropPos, stateRule));
+			pending = pendingHarvestRulesByKey.get(trackedKey);
+			directKey = trackedKey;
+		}
 		if (pending == null) {
 			return null;
 		}
 		long now = TimeAPIManager.getGameplayTicks();
 		if (pending.expiresAtGameplayTick < now) {
-			pendingHarvestRulesByKey.remove(cropKey(world, cropPos));
+			pendingHarvestRulesByKey.remove(directKey);
 			return null;
 		}
 		return pending.rule;
@@ -1906,7 +2238,7 @@ public final class FarmingCropsManager {
 			return;
 		}
 
-		String key = cropKey(world, cropPos);
+		String key = cropKey(world, resolveTrackedCropPosition(world, cropPos, rule));
 		PendingHarvestRule existing = pendingHarvestRulesByKey.get(key);
 		boolean retainedFertilized = fertilized || (existing != null && existing.fertilized());
 		long expiresAtGameplayTick = TimeAPIManager.getGameplayTicks() + PENDING_HARVEST_TTL_TICKS;
@@ -1930,13 +2262,19 @@ public final class FarmingCropsManager {
 			return false;
 		}
 
-		PendingHarvestRule pending = pendingHarvestRulesByKey.get(cropKey(world, cropPos));
+		PendingHarvestRule pending = pendingHarvestRulesByKey.get(
+			cropKey(world, resolveTrackedCropPosition(world, cropPos, rule))
+		);
 		if (pending != null && pending.matches(rule)) {
 			return pending.fertilized();
 		}
 
-		PlotState plot = findPlot(world, cropPos.below());
-		return plot != null && plot.fertilized;
+		CropState crop = findCrop(world, cropPos);
+		BlockPos soilPos = crop == null
+			? resolveTrackedCropPosition(world, cropPos, rule).below()
+			: BlockPos.of(crop.soilPos);
+		PlotState plot = findPlot(world, soilPos);
+		return isPlotFertilized(world, plot);
 	}
 
 	private static void emitFertilizedParticles(ServerLevel world, BlockPos soilPos) {
@@ -1972,8 +2310,33 @@ public final class FarmingCropsManager {
 		return Math.max(1.0d, rule.growthMinecraftDays() * TimeAPIManager.MINECRAFT_TICKS_PER_CYCLE);
 	}
 
+	private static long resolveFertilizerDurationTicks() {
+		double durationTicks = settings.fertilizerDurationDays() * TimeAPIManager.MINECRAFT_TICKS_PER_CYCLE;
+		if (!Double.isFinite(durationTicks) || durationTicks <= 0.0d) {
+			return 0L;
+		}
+		return durationTicks >= Long.MAX_VALUE ? Long.MAX_VALUE : Math.max(1L, (long) Math.ceil(durationTicks));
+	}
+
 	private static double resolveGrowthSpeedMultiplier(CropRule rule, ServerLevel world, BlockPos cropPos) {
+		return resolveGrowthSpeedMultiplier(
+			rule,
+			world,
+			cropPos,
+			isVerticalCrop(rule) ? resolveVerticalCropGeometry(world, cropPos, rule) : null
+		);
+	}
+
+	private static double resolveGrowthSpeedMultiplier(
+		CropRule rule,
+		ServerLevel world,
+		BlockPos cropPos,
+		VerticalCropGeometry geometry
+	) {
 		if (rule == null || world == null || cropPos == null) {
+			return 0.0d;
+		}
+		if (geometry != null && geometry.growthBlocked()) {
 			return 0.0d;
 		}
 
@@ -1981,7 +2344,7 @@ public final class FarmingCropsManager {
 		BlockState soilState = world.getBlockState(soilPos);
 		PlotState plot = findPlot(world, soilPos);
 		double speedMultiplier = 1.0d + resolveGrowingConditionsSpeedModifier(rule, world, cropPos);
-		if (plot != null && plot.fertilized) {
+		if (plot != null && isPlotFertilized(world, plot)) {
 			speedMultiplier += settings.fertilizedGrowthBoost;
 		}
 		if (world.isRainingAt(cropPos)) {
@@ -2201,6 +2564,13 @@ public final class FarmingCropsManager {
 		return value;
 	}
 
+	private static int clampInt(int value, int fallback, int min, int max) {
+		if (value < min || value > max) {
+			return fallback;
+		}
+		return value;
+	}
+
 
 	private record PendingHarvestRule(CropRule rule, long expiresAtGameplayTick, boolean fertilized) {
 		private boolean matches(CropRule other) {
@@ -2208,13 +2578,15 @@ public final class FarmingCropsManager {
 		}
 	}
 
+	private record VerticalCropGeometry(BlockPos basePos, int height, boolean growthBlocked) { }
+
 	private static final class PlotState {
 		private final String levelId;
 		private final long soilPos;
 		private long cropPos;
 		private String cropId;
 		private boolean fertilized;
-		private long fertilizedAtGameplayTick;
+		private long fertilizedAtAbsoluteDayTime;
 
 		private PlotState(String levelId, long soilPos) {
 			this.levelId = levelId == null ? "" : levelId;
@@ -2222,7 +2594,7 @@ public final class FarmingCropsManager {
 			this.cropPos = -1L;
 			this.cropId = "";
 			this.fertilized = false;
-			this.fertilizedAtGameplayTick = Long.MIN_VALUE;
+			this.fertilizedAtAbsoluteDayTime = Long.MIN_VALUE;
 		}
 
 		private String key() {
@@ -2245,8 +2617,7 @@ public final class FarmingCropsManager {
 			data.putLong(FIELD_CROP_POS, cropPos);
 			data.putString(FIELD_CROP_ID, cropId);
 			data.putBoolean(FIELD_FERTILIZED, fertilized);
-			data.putLong(FIELD_FERTILIZED_AT_GAMEPLAY_TICK,
-				fertilizedAtGameplayTick == Long.MIN_VALUE ? -1L : fertilizedAtGameplayTick);
+			data.putLong(FIELD_FERTILIZED_AT_ABSOLUTE_DAY_TIME, fertilizedAtAbsoluteDayTime);
 			return data;
 		}
 
@@ -2266,9 +2637,9 @@ public final class FarmingCropsManager {
 			plot.cropPos = getLong(source, FIELD_CROP_POS, -1L);
 			plot.cropId = normalizeRegistryId(getString(source, FIELD_CROP_ID, ""));
 			plot.fertilized = getBoolean(source, FIELD_FERTILIZED, false);
-			plot.fertilizedAtGameplayTick = getLong(source, FIELD_FERTILIZED_AT_GAMEPLAY_TICK, -1L);
-			if (plot.fertilizedAtGameplayTick < 0L) {
-				plot.fertilizedAtGameplayTick = Long.MIN_VALUE;
+			plot.fertilizedAtAbsoluteDayTime = getLong(source, FIELD_FERTILIZED_AT_ABSOLUTE_DAY_TIME, Long.MIN_VALUE);
+			if (plot.fertilized && plot.fertilizedAtAbsoluteDayTime == Long.MIN_VALUE) {
+				plot.fertilized = false;
 			}
 			if (!plot.hasCrop()) {
 				plot.clearCrop();
@@ -2358,6 +2729,7 @@ public final class FarmingCropsManager {
 		double rainGrowthBoost,
 		double fertilizedGrowthBoost,
 		double fertilizedYieldBoost,
+		double fertilizerDurationDays,
 		double dryFarmlandPenalty
 	) {
 		private static Settings defaults() {
@@ -2367,6 +2739,7 @@ public final class FarmingCropsManager {
 				FarmingConfigManager.DEFAULT_RAIN_GROWTH_BOOST,
 				FarmingConfigManager.DEFAULT_FERTILIZED_GROWTH_BOOST,
 				FarmingConfigManager.DEFAULT_FERTILIZED_YIELD_BOOST,
+				FarmingConfigManager.DEFAULT_FERTILIZER_DURATION_DAYS,
 				FarmingConfigManager.DEFAULT_DRY_FARMLAND_PENALTY
 			);
 		}
@@ -2396,6 +2769,12 @@ public final class FarmingCropsManager {
 				0.0d,
 				1.0d
 			);
+			double fertilizerDurationDays = clampDouble(
+				getDouble(source, FarmingConfigManager.FIELD_FERTILIZER_DURATION_DAYS, FarmingConfigManager.DEFAULT_FERTILIZER_DURATION_DAYS),
+				FarmingConfigManager.DEFAULT_FERTILIZER_DURATION_DAYS,
+				0.0d,
+				36500.0d
+			);
 			double dryFarmlandPenalty = clampDouble(
 				getDouble(source, FarmingConfigManager.FIELD_DRY_FARMLAND_PENALTY, FarmingConfigManager.DEFAULT_DRY_FARMLAND_PENALTY),
 				FarmingConfigManager.DEFAULT_DRY_FARMLAND_PENALTY,
@@ -2408,6 +2787,7 @@ public final class FarmingCropsManager {
 				rainBoost,
 				fertilizedBoost,
 				fertilizedYieldBoost,
+				fertilizerDurationDays,
 				dryFarmlandPenalty
 			);
 		}
@@ -2419,6 +2799,7 @@ public final class FarmingCropsManager {
 				.put(FarmingConfigManager.FIELD_RAIN_GROWTH_BOOST, rainGrowthBoost)
 				.put(FarmingConfigManager.FIELD_FERTILIZED_GROWTH_BOOST, fertilizedGrowthBoost)
 				.put(FarmingConfigManager.FIELD_FERTILIZED_YIELD_BOOST, fertilizedYieldBoost)
+				.put(FarmingConfigManager.FIELD_FERTILIZER_DURATION_DAYS, fertilizerDurationDays)
 				.put(FarmingConfigManager.FIELD_DRY_FARMLAND_PENALTY, dryFarmlandPenalty)
 				.build();
 		}
@@ -2433,6 +2814,11 @@ public final class FarmingCropsManager {
 		private final String yieldTableId;
 		private final String displayName;
 		private final double growthMinecraftDays;
+		private final int maxHeight;
+		private final Set<String> supportBlockIds;
+		private final Set<String> supportTagIds;
+		private final Set<Block> supportBlocks;
+		private final Set<TagKey<Block>> supportTags;
 		private final GrowingConditions growingConditions;
 		private final Block matureBlock;
 
@@ -2444,6 +2830,9 @@ public final class FarmingCropsManager {
 			String yieldTableId,
 			String displayName,
 			double growthMinecraftDays,
+			int maxHeight,
+			Set<String> supportBlockIds,
+			Set<String> supportTagIds,
 			GrowingConditions growingConditions,
 			Block matureBlock
 		) {
@@ -2454,6 +2843,11 @@ public final class FarmingCropsManager {
 			this.yieldTableId = yieldTableId == null ? "" : yieldTableId;
 			this.displayName = displayName;
 			this.growthMinecraftDays = growthMinecraftDays;
+			this.maxHeight = Math.max(1, maxHeight);
+			this.supportBlockIds = supportBlockIds == null ? Set.of() : Set.copyOf(supportBlockIds);
+			this.supportTagIds = supportTagIds == null ? Set.of() : Set.copyOf(supportTagIds);
+			this.supportBlocks = resolveSupportBlocks(this.supportBlockIds);
+			this.supportTags = resolveSupportTags(this.supportTagIds);
 			this.growingConditions = growingConditions;
 			this.matureBlock = matureBlock;
 		}
@@ -2465,7 +2859,8 @@ public final class FarmingCropsManager {
 				defaultBeetroot(),
 				defaultMelon(),
 				defaultPumpkin(),
-				defaultWheat()
+				defaultWheat(),
+				defaultSugarCane()
 			);
 		}
 
@@ -2484,6 +2879,7 @@ public final class FarmingCropsManager {
 				case "melon", "minecraft:melon", "minecraft:melon_stem" -> defaultMelon();
 				case "pumpkin", "minecraft:pumpkin", "minecraft:pumpkin_stem" -> defaultPumpkin();
 				case "wheat", "minecraft:wheat" -> defaultWheat();
+				case "sugar-cane", "sugar_cane", "minecraft:sugar_cane" -> defaultSugarCane();
 				default -> null;
 			};
 		}
@@ -2560,6 +2956,21 @@ public final class FarmingCropsManager {
 			);
 		}
 
+		private static CropRule defaultSugarCane() {
+			return fromValues(
+				"sugar_cane",
+				"minecraft:sugar_cane",
+				"minecraft:sugar_cane",
+				"minecraft:sugar_cane",
+				4.0d,
+				"minecraft:blocks/sugar_cane",
+				new GrowingConditions(60, 80, 10, 30),
+				5,
+				Set.of("minecraft:grass_block"),
+				Set.of("minecraft:dirt", "minecraft:sand")
+			);
+		}
+
 		private static CropRule fromJson(String fileKey, JsonObject source) {
 			CropRule fallback = defaultRule(fileKey);
 			if (fallback == null) {
@@ -2577,6 +2988,22 @@ public final class FarmingCropsManager {
 				0.25d,
 				365.0d
 			);
+			int maxHeight = clampInt(
+				(int) Math.round(getDouble(source, CropsConfigManager.FIELD_MAX_HEIGHT, fallback.maxHeight)),
+				fallback.maxHeight,
+				1,
+				16
+			);
+			Set<String> supportBlockIds = parseSupportIds(
+				source,
+				CropsConfigManager.FIELD_SUPPORT_BLOCKS,
+				fallback.supportBlockIds
+			);
+			Set<String> supportTagIds = parseSupportIds(
+				source,
+				CropsConfigManager.FIELD_SUPPORT_TAGS,
+				fallback.supportTagIds
+			);
 			return fromValues(
 				cropId,
 				fallback.cropBlockId,
@@ -2584,7 +3011,10 @@ public final class FarmingCropsManager {
 				fallback.plantingItemId,
 				growthDays,
 				parseYieldTableId(source, fallback.yieldTableId),
-				parseGrowingConditions(source, fallback.growingConditions)
+				parseGrowingConditions(source, fallback.growingConditions),
+				maxHeight,
+				supportBlockIds,
+				supportTagIds
 			);
 		}
 
@@ -2597,6 +3027,32 @@ public final class FarmingCropsManager {
 			String yieldTableId,
 			GrowingConditions growingConditions
 		) {
+			return fromValues(
+				cropId,
+				cropBlockId,
+				matureBlockId,
+				plantingItemId,
+				growthMinecraftDays,
+				yieldTableId,
+				growingConditions,
+				1,
+				Set.of("minecraft:farmland"),
+				Set.of()
+			);
+		}
+
+		private static CropRule fromValues(
+			String cropId,
+			String cropBlockId,
+			String matureBlockId,
+			String plantingItemId,
+			double growthMinecraftDays,
+			String yieldTableId,
+			GrowingConditions growingConditions,
+			int maxHeight,
+			Set<String> supportBlockIds,
+			Set<String> supportTagIds
+		) {
 			String normalizedCropId = normalizeRegistryId(cropId);
 			String normalizedCropBlockId = normalizeRegistryId(cropBlockId);
 			String normalizedMatureBlockId = normalizeRegistryId(matureBlockId);
@@ -2605,13 +3061,16 @@ public final class FarmingCropsManager {
 			Block matureBlock = matureBlockIdentifier == null ? null : BuiltInRegistries.BLOCK.getValue(matureBlockIdentifier);
 			String displayName = normalizeDisplayName(normalizedCropId);
 			return new CropRule(
-					normalizedCropId,
+				normalizedCropId,
 				normalizedCropBlockId,
 				normalizedMatureBlockId,
 				normalizedPlantingItemId,
 				normalizeRegistryId(yieldTableId),
 				displayName,
 				growthMinecraftDays,
+				maxHeight,
+				normalizeSupportIds(supportBlockIds, false),
+				normalizeSupportIds(supportTagIds, true),
 				growingConditions,
 				matureBlock
 			);
@@ -2621,6 +3080,73 @@ public final class FarmingCropsManager {
 			String value = getString(source, CropsConfigManager.FIELD_YIELD_ID, fallback);
 			String normalized = normalizeRegistryId(value);
 			return normalized.isBlank() ? fallback : normalized;
+		}
+
+		private static Set<String> parseSupportIds(JsonObject source, String key, Set<String> fallback) {
+			JsonElement element = source == null ? null : source.get(key);
+			if (element == null || !element.isJsonArray()) {
+				return fallback == null ? Set.of() : fallback;
+			}
+
+			Set<String> values = new LinkedHashSet<>();
+			for (JsonElement entry : element.getAsJsonArray()) {
+				if (entry == null || !entry.isJsonPrimitive() || !entry.getAsJsonPrimitive().isString()) {
+					continue;
+				}
+				String value = entry.getAsString();
+				if (CropsConfigManager.FIELD_SUPPORT_TAGS.equals(key) && value != null && value.startsWith("#")) {
+					value = value.substring(1);
+				}
+				String normalized = normalizeRegistryId(value);
+				if (!normalized.isBlank()) {
+					values.add(normalized);
+				}
+			}
+			return values.isEmpty()
+				? (fallback == null ? Set.of() : fallback)
+				: Set.copyOf(values);
+		}
+
+		private static Set<String> normalizeSupportIds(Set<String> values, boolean tags) {
+			Set<String> normalized = new LinkedHashSet<>();
+			if (values != null) {
+				for (String value : values) {
+					if (tags && value != null && value.startsWith("#")) {
+						value = value.substring(1);
+					}
+					String identifier = normalizeRegistryId(value);
+					if (!identifier.isBlank()) {
+						normalized.add(identifier);
+					}
+				}
+			}
+			return Set.copyOf(normalized);
+		}
+
+		private static Set<Block> resolveSupportBlocks(Set<String> supportIds) {
+			Set<Block> resolved = new LinkedHashSet<>();
+			if (supportIds != null) {
+				for (String supportId : supportIds) {
+					Block block = resolveBlockByRegistryId(supportId);
+					if (block != null) {
+						resolved.add(block);
+					}
+				}
+			}
+			return Set.copyOf(resolved);
+		}
+
+		private static Set<TagKey<Block>> resolveSupportTags(Set<String> supportIds) {
+			Set<TagKey<Block>> resolved = new LinkedHashSet<>();
+			if (supportIds != null) {
+				for (String supportId : supportIds) {
+					Identifier identifier = Identifier.tryParse(supportId);
+					if (identifier != null) {
+						resolved.add(TagKey.create(Registries.BLOCK, identifier));
+					}
+				}
+			}
+			return Set.copyOf(resolved);
 		}
 
 		private static GrowingConditions parseGrowingConditions(JsonObject source, GrowingConditions fallback) {
@@ -2697,6 +3223,18 @@ public final class FarmingCropsManager {
 			return growthMinecraftDays;
 		}
 
+		public int maxHeight() {
+			return maxHeight;
+		}
+
+		private Set<Block> supportBlocks() {
+			return supportBlocks;
+		}
+
+		private Set<TagKey<Block>> supportTags() {
+			return supportTags;
+		}
+
 		public GrowingConditions growingConditions() {
 			return growingConditions;
 		}
@@ -2716,7 +3254,18 @@ public final class FarmingCropsManager {
 			return JSONFormatAPIManager.object()
 				.put(CropsConfigManager.FIELD_CROP_ID, cropId)
 				.put(CropsConfigManager.FIELD_GROWTH_TIME, growthMinecraftDays)
+				.put(CropsConfigManager.FIELD_MAX_HEIGHT, maxHeight)
 				.put(CropsConfigManager.FIELD_YIELD_ID, yieldTableId)
+				.array(CropsConfigManager.FIELD_SUPPORT_BLOCKS, blocks -> {
+					for (String supportBlockId : supportBlockIds) {
+						blocks.add(supportBlockId);
+					}
+				})
+				.array(CropsConfigManager.FIELD_SUPPORT_TAGS, tags -> {
+					for (String supportTagId : supportTagIds) {
+						tags.add(supportTagId);
+					}
+				})
 				.object(CropsConfigManager.FIELD_GROWING_CONDITIONS, conditionsRoot -> conditionsRoot
 					.object(CropsConfigManager.FIELD_IDEAL_TEMPERATURE, temperature -> temperature
 						.put(CropsConfigManager.FIELD_MINIMUM_TEMPERATURE, conditions.minimumTemperature())

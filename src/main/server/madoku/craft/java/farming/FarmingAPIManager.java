@@ -58,6 +58,7 @@ public final class FarmingAPIManager {
 	public static boolean applyExternalGrowthPercent(ServerLevel world, BlockPos cropPos, double growthPercent, String source) { return provider.applyExternalGrowthPercent(world, cropPos, growthPercent, source); }
 	public static boolean isCropPlantItem(ItemStack stack) { return provider.isCropPlantItem(stack); }
 	public static boolean isFarmland(BlockState state) { return provider.isFarmland(state); }
+	public static boolean isFarmingSoil(BlockState state) { return provider.isFarmingSoil(state); }
 	public static boolean isManagedCrop(BlockState state) { return provider.isManagedCrop(state); }
 	public static boolean isManagedCrop(ServerLevel world, BlockPos cropPos, BlockState state) { return provider.isManagedCrop(world, cropPos, state); }
 	public static boolean isFertilized(ServerLevel world, BlockPos soilPos) { return provider.isFertilized(world, soilPos); }

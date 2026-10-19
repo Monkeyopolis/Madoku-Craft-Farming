@@ -24,6 +24,7 @@ public final class MadokuFarmingProvider implements FarmingProvider {
 	@Override public boolean applyExternalGrowthPercent(ServerLevel world, BlockPos cropPos, double growthPercent, String source) { return MadokuFarmingManager.applyExternalGrowthPercent(world, cropPos, growthPercent, source); }
 	@Override public boolean isCropPlantItem(ItemStack stack) { return MadokuFarmingManager.isCropPlantItem(stack); }
 	@Override public boolean isFarmland(BlockState state) { return MadokuFarmingManager.isFarmland(state); }
+	@Override public boolean isFarmingSoil(BlockState state) { return MadokuFarmingManager.isFarmingSoil(state); }
 	@Override public boolean isManagedCrop(BlockState state) { return MadokuFarmingManager.isManagedCrop(state); }
 	@Override public boolean isManagedCrop(ServerLevel world, BlockPos cropPos, BlockState state) { return MadokuFarmingManager.isManagedCrop(world, cropPos, state); }
 	@Override public boolean isFertilized(ServerLevel world, BlockPos soilPos) { return MadokuFarmingManager.isFertilized(world, soilPos); }

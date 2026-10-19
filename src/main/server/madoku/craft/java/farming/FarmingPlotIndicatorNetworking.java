@@ -11,7 +11,8 @@ final class FarmingPlotIndicatorNetworking {
 		if (player == null || payload == null) {
 			return false;
 		}
-		if (!ServerPlayNetworking.canSend(player, payload.type())) {
+		boolean canSend = ServerPlayNetworking.canSend(player, payload.type());
+		if (!canSend) {
 			return false;
 		}
 		ServerPlayNetworking.send(player, payload);

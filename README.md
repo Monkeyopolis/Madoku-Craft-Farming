@@ -26,6 +26,7 @@ These features are customizable in the config files.
 - Pumpkins and melons no longer grow adjacent to their stem.
 - Since pumpkins and melons replace their Ssem, their yield were adjusted accordingly.
 - This allows pumpkins and melons to grow similar to other crops.
+- Sugarcane can now group to five instead of three.
 
 **Farm Indicator:**
 
