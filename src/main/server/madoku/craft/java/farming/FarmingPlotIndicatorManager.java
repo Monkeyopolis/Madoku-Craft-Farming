@@ -244,6 +244,15 @@ final class FarmingPlotIndicatorManager {
 		}
 	}
 
+	/** Requests an immediate state refresh without removing a still-valid plot. */
+	static void refreshPlot(ServerLevel level, long soilPos) {
+		if (level == null) {
+			return;
+		}
+		BlockPos position = BlockPos.of(soilPos);
+		requestResync(level, position.getX() >> 4, position.getZ() >> 4);
+	}
+
 	private static void syncPlayer(ServerPlayer player) {
 		if (player == null || !(player.level() instanceof ServerLevel serverLevel)) {
 			return;
@@ -351,6 +360,13 @@ final class FarmingPlotIndicatorManager {
 			|| Math.abs(current.worldClockRate() - previous.worldClockRate()) >= WORLD_CLOCK_RATE_CHANGE_EPSILON) {
 			// A weather, fertilization, or clock-rate change can make the displayed
 			// duration increase. Do not preserve a stale near-zero value.
+			return current;
+		}
+		if (previous.remainingGrowthTicks() <= 0.25D
+			&& current.remainingGrowthTicks() > previous.remainingGrowthTicks() + 0.25D) {
+			// A crop can transition from the stem-growth phase to its persisted
+			// mature-stem cooldown without changing speed. Allow that phase change
+			// to replace a stale zero-duration client value.
 			return current;
 		}
 		return current.remainingGrowthTicks() <= previous.remainingGrowthTicks()

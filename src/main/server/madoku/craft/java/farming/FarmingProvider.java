@@ -23,6 +23,8 @@ public interface FarmingProvider {
 	default boolean isComposterEnabled() { return false; }
 	default boolean applyExternalGrowthPercent(ServerLevel world, BlockPos cropPos, double growthPercent, String source) { return false; }
 	default boolean isCropPlantItem(ItemStack stack) { return false; }
+	default void handleCropRandomTickAfter(ServerLevel world, BlockPos cropPos, BlockState state) { }
+	default boolean usesVanillaGrowth(BlockState state) { return false; }
 	default boolean isFarmland(BlockState state) { return false; }
 	default boolean isFarmingSoil(BlockState state) { return false; }
 	default boolean isManagedCrop(BlockState state) { return false; }
@@ -36,6 +38,7 @@ public interface FarmingProvider {
 	default boolean applySeasonalMoisture(ServerLevel world, BlockPos soilPos, BlockState soilState) { return false; }
 	default void trackCrop(ServerLevel world, BlockPos cropPos, BlockState cropState) { }
 	default boolean handleCropRandomTick(ServerLevel world, BlockPos cropPos, BlockState state, RandomSource random) { return false; }
+	default boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state) { return false; }
 	default boolean isCropHarvestReady(ServerLevel world, BlockPos cropPos, BlockState state) { return false; }
 	default boolean isManagedHarvestState(ServerLevel world, BlockPos cropPos, BlockState state) { return false; }
 	default void prepareCropHarvest(ServerLevel world, BlockPos cropPos, BlockState state) { }

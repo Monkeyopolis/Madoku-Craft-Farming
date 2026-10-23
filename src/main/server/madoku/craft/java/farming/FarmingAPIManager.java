@@ -57,6 +57,8 @@ public final class FarmingAPIManager {
 	public static boolean isComposterEnabled() { return provider.isComposterEnabled(); }
 	public static boolean applyExternalGrowthPercent(ServerLevel world, BlockPos cropPos, double growthPercent, String source) { return provider.applyExternalGrowthPercent(world, cropPos, growthPercent, source); }
 	public static boolean isCropPlantItem(ItemStack stack) { return provider.isCropPlantItem(stack); }
+	public static void handleCropRandomTickAfter(ServerLevel world, BlockPos cropPos, BlockState state) { provider.handleCropRandomTickAfter(world, cropPos, state); }
+	public static boolean usesVanillaGrowth(BlockState state) { return provider.usesVanillaGrowth(state); }
 	public static boolean isFarmland(BlockState state) { return provider.isFarmland(state); }
 	public static boolean isFarmingSoil(BlockState state) { return provider.isFarmingSoil(state); }
 	public static boolean isManagedCrop(BlockState state) { return provider.isManagedCrop(state); }
@@ -70,6 +72,7 @@ public final class FarmingAPIManager {
 	public static boolean applySeasonalMoisture(ServerLevel world, BlockPos soilPos, BlockState soilState) { return provider.applySeasonalMoisture(world, soilPos, soilState); }
 	public static void trackCrop(ServerLevel world, BlockPos cropPos, BlockState cropState) { provider.trackCrop(world, cropPos, cropState); }
 	public static boolean handleCropRandomTick(ServerLevel world, BlockPos cropPos, BlockState state, RandomSource random) { return provider.handleCropRandomTick(world, cropPos, state, random); }
+	public static boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state) { return provider.handleCropUseWithoutItem(world, cropPos, state); }
 	public static boolean isCropHarvestReady(ServerLevel world, BlockPos cropPos, BlockState state) { return provider.isCropHarvestReady(world, cropPos, state); }
 	public static boolean isManagedHarvestState(ServerLevel world, BlockPos cropPos, BlockState state) { return provider.isManagedHarvestState(world, cropPos, state); }
 	public static void prepareCropHarvest(ServerLevel world, BlockPos cropPos, BlockState state) { provider.prepareCropHarvest(world, cropPos, state); }

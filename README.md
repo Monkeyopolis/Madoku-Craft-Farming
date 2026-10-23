@@ -1,7 +1,7 @@
 ## Overview:
 
 Madoku Craft: Farming adjusts crops to grow based on time instead of randomly.
-It modifies the yield for crops and allows farmland to be fertilized.
+It modifies the yield for crops and allows farmland and other blocks to be fertilized.
 These features are customizable in the config files.
 
 ## Dependencies:
@@ -19,14 +19,12 @@ These features are customizable in the config files.
 **Fertilizer:**
 
 - Placing bonemeal on farmland fertlizes the plot.
-- Fertilized farmland allows crops to grow faster and increases their yield.
+- Fertilized farmland allows crops to grow faster.
 
 **Adjusted Crops:**
 
-- Pumpkins and melons no longer grow adjacent to their stem.
-- Since pumpkins and melons replace their Ssem, their yield were adjusted accordingly.
-- This allows pumpkins and melons to grow similar to other crops.
 - Sugarcane can now group to five instead of three.
+- Pumpkin, melon, and sweet berries can now wilt when harvested.
 
 **Farm Indicator:**
 

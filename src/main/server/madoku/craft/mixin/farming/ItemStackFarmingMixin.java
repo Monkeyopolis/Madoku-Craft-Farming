@@ -48,7 +48,9 @@ public abstract class ItemStackFarmingMixin {
 		}
 
 			BlockState state = level.getBlockState(pos);
-			if (stack.is(Items.BONE_MEAL) && FarmingAPIManager.isManagedCrop(state)) {
+			if (stack.is(Items.BONE_MEAL)
+				&& FarmingAPIManager.isManagedCrop(state)
+				&& !FarmingAPIManager.usesVanillaGrowth(state)) {
 				cir.setReturnValue(InteractionResult.FAIL);
 				return;
 			}

@@ -66,6 +66,8 @@ public final class MadokuFarmingManager {
 	}
 
 	public static boolean isCropPlantItem(ItemStack stack) { return FarmingCropsManager.isCropPlantItem(stack); }
+	public static void handleCropRandomTickAfter(ServerLevel world, BlockPos cropPos, BlockState state) { FarmingCropsManager.handleCropRandomTickAfter(world, cropPos, state); }
+	public static boolean usesVanillaGrowth(BlockState state) { return FarmingCropsManager.usesVanillaGrowth(state); }
 	public static boolean isFarmland(BlockState state) { return FarmingCropsManager.isFarmland(state); }
 	public static boolean isFarmingSoil(BlockState state) { return FarmingCropsManager.isFarmingSoil(state); }
 	public static boolean isManagedCrop(BlockState state) { return FarmingCropsManager.isManagedCrop(state); }
@@ -98,6 +100,9 @@ public final class MadokuFarmingManager {
 	}
 	public static boolean handleCropRandomTick(ServerLevel world, BlockPos cropPos, BlockState state, RandomSource random) {
 		return FarmingCropsManager.handleCropRandomTick(world, cropPos, state, random);
+	}
+	public static boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state) {
+		return FarmingCropsManager.handleCropUseWithoutItem(world, cropPos, state);
 	}
 	public static boolean isCropHarvestReady(ServerLevel world, BlockPos cropPos, BlockState state) {
 		return FarmingCropsManager.isCropHarvestReady(world, cropPos, state);

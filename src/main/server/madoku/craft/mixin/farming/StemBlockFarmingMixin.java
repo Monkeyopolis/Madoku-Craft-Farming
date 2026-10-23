@@ -29,5 +29,18 @@ public abstract class StemBlockFarmingMixin {
 			ci.cancel();
 		}
 	}
+
+	@Inject(method = "randomTick", at = @At("TAIL"))
+	private void madokuCraft$recordNativeStemMaturity(
+		BlockState state,
+		ServerLevel level,
+		BlockPos pos,
+		RandomSource ignoredRandom,
+		CallbackInfo ci
+	) {
+		if (FarmingAPIManager.isEnabled() && FarmingAPIManager.isManagedCrop(state)) {
+			FarmingAPIManager.handleCropRandomTickAfter(level, pos, state);
+		}
+	}
 }
 
