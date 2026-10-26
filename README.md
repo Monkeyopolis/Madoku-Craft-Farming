@@ -18,8 +18,8 @@ These features are customizable in the config files.
 
 **Fertilizer:**
 
-- Placing bonemeal on farmland fertlizes the plot.
-- Fertilized farmland allows crops to grow faster.
+- Placing bonemeal on certain blocks fertlizes the plot.
+- Fertilized plots allows crops to grow faster.
 
 **Adjusted Crops:**
 
