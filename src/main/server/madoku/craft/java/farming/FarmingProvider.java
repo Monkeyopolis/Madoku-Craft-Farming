@@ -3,6 +3,7 @@ package madoku.craft.java.farming;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -25,6 +26,7 @@ public interface FarmingProvider {
 	default boolean isCropPlantItem(ItemStack stack) { return false; }
 	default void handleCropRandomTickAfter(ServerLevel world, BlockPos cropPos, BlockState state) { }
 	default boolean usesVanillaGrowth(BlockState state) { return false; }
+	default boolean isVerticalCrop(BlockState state) { return false; }
 	default boolean isFarmland(BlockState state) { return false; }
 	default boolean isFarmingSoil(BlockState state) { return false; }
 	default boolean isManagedCrop(BlockState state) { return false; }
@@ -37,8 +39,12 @@ public interface FarmingProvider {
 	default boolean shouldMaintainSeasonalMoisture(ServerLevel world, BlockPos soilPos) { return false; }
 	default boolean applySeasonalMoisture(ServerLevel world, BlockPos soilPos, BlockState soilState) { return false; }
 	default void trackCrop(ServerLevel world, BlockPos cropPos, BlockState cropState) { }
+	default void handleBlockStateChanged(ServerLevel world, BlockPos changedPos) { }
 	default boolean handleCropRandomTick(ServerLevel world, BlockPos cropPos, BlockState state, RandomSource random) { return false; }
 	default boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state) { return false; }
+	default boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state, ServerPlayer player) {
+		return handleCropUseWithoutItem(world, cropPos, state);
+	}
 	default boolean isCropHarvestReady(ServerLevel world, BlockPos cropPos, BlockState state) { return false; }
 	default boolean isManagedHarvestState(ServerLevel world, BlockPos cropPos, BlockState state) { return false; }
 	default void prepareCropHarvest(ServerLevel world, BlockPos cropPos, BlockState state) { }

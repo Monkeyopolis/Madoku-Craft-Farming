@@ -8,6 +8,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -25,6 +26,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class ItemStackFarmingMixin {
 	@Unique
 	private int madokuCraft$preUseOnCount = -1;
+
+	@Unique
+	private BlockState madokuCraft$preUseOnClickedState;
 
 	@Inject(method = "useOn", at = @At("HEAD"), cancellable = true)
 	private void madokuCraft$handleFarmingItemUse(UseOnContext context, CallbackInfoReturnable<InteractionResult> cir) {
@@ -45,6 +49,7 @@ public abstract class ItemStackFarmingMixin {
 
 		if (FarmingAPIManager.isCropPlantItem(stack)) {
 			madokuCraft$preUseOnCount = stack.getCount();
+			madokuCraft$preUseOnClickedState = level.getBlockState(pos);
 		}
 
 			BlockState state = level.getBlockState(pos);
@@ -110,11 +115,13 @@ public abstract class ItemStackFarmingMixin {
 		ItemStack stack = (ItemStack) (Object) this;
 		if (!FarmingAPIManager.isEnabled() || context == null) {
 			madokuCraft$preUseOnCount = -1;
+			madokuCraft$preUseOnClickedState = null;
 			return;
 		}
 		boolean cropPlantAttempt = madokuCraft$preUseOnCount >= 0;
 		if (!cropPlantAttempt) {
 			madokuCraft$preUseOnCount = -1;
+			madokuCraft$preUseOnClickedState = null;
 			return;
 		}
 
@@ -122,11 +129,14 @@ public abstract class ItemStackFarmingMixin {
 		if (result == null || !result.consumesAction()) {
 			madokuCraft$restoreUseOnCount(stack);
 			madokuCraft$preUseOnCount = -1;
+			madokuCraft$preUseOnClickedState = null;
 			return;
 		}
 
 		Level level = context.getLevel();
 		if (!(level instanceof ServerLevel serverLevel)) {
+			madokuCraft$preUseOnCount = -1;
+			madokuCraft$preUseOnClickedState = null;
 			return;
 		}
 
@@ -134,22 +144,45 @@ public abstract class ItemStackFarmingMixin {
 		Direction clickedFace = context.getClickedFace();
 		if (clickedPos == null || clickedFace == null) {
 			madokuCraft$preUseOnCount = -1;
+			madokuCraft$preUseOnClickedState = null;
 			return;
 		}
 
-		BlockPos cropPos = clickedPos.relative(clickedFace);
-		BlockState cropState = level.getBlockState(cropPos);
-		if (!FarmingAPIManager.isManagedCrop(cropState)) {
+		BlockPos adjacentCropPos = clickedPos.relative(clickedFace);
+		BlockState adjacentCropState = level.getBlockState(adjacentCropPos);
+		BlockPos cropPos = adjacentCropPos;
+		BlockState cropState = adjacentCropState;
+		boolean managed = FarmingAPIManager.isManagedCrop(cropState);
+		if (!managed
+			&& madokuCraft$preUseOnClickedState != null
+			&& madokuCraft$preUseOnClickedState.canBeReplaced()) {
+			BlockState clickedCropState = level.getBlockState(clickedPos);
+			if (FarmingAPIManager.isManagedCrop(clickedCropState)) {
+				cropPos = clickedPos;
+				cropState = clickedCropState;
+				managed = true;
+			}
+		}
+		if (!managed) {
 			madokuCraft$preUseOnCount = -1;
+			madokuCraft$preUseOnClickedState = null;
 			return;
 		}
 
-		// Crop seeds are BlockItems, so Core's generic placement tracker also
-		// records the planted crop. Farming owns these crops and must not let that
-		// marker suppress the configured harvest path.
-		ChunkDataAPIManager.removePlayerPlacedBlock(serverLevel, cropPos);
+		// Keep the marker on vertical crop segments. Their source segment must not
+		// count as harvested material, while grown segments remain unmarked and
+		// eligible. Other managed crops remove the marker because their configured
+		// harvest path owns the resulting drops.
+		if (FarmingAPIManager.isVerticalCrop(cropState)) {
+			if (context.getPlayer() instanceof ServerPlayer) {
+				ChunkDataAPIManager.recordPlayerPlacedBlock(serverLevel, cropPos);
+			}
+		} else {
+			ChunkDataAPIManager.removePlayerPlacedBlock(serverLevel, cropPos);
+		}
 		FarmingAPIManager.trackCrop(serverLevel, cropPos, cropState);
 		madokuCraft$preUseOnCount = -1;
+		madokuCraft$preUseOnClickedState = null;
 	}
 
 	@Unique

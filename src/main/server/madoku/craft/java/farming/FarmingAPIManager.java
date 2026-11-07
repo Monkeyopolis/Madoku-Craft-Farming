@@ -1,10 +1,12 @@
 package madoku.craft.java.farming;
 
+import madoku.craft.java.core.farming.CropHarvestAPIManager;
 import madoku.craft.java.core.data.DataSaveParticipant;
 import madoku.craft.java.core.data.DataSaveParticipantAPIManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -59,6 +61,7 @@ public final class FarmingAPIManager {
 	public static boolean isCropPlantItem(ItemStack stack) { return provider.isCropPlantItem(stack); }
 	public static void handleCropRandomTickAfter(ServerLevel world, BlockPos cropPos, BlockState state) { provider.handleCropRandomTickAfter(world, cropPos, state); }
 	public static boolean usesVanillaGrowth(BlockState state) { return provider.usesVanillaGrowth(state); }
+	public static boolean isVerticalCrop(BlockState state) { return provider.isVerticalCrop(state); }
 	public static boolean isFarmland(BlockState state) { return provider.isFarmland(state); }
 	public static boolean isFarmingSoil(BlockState state) { return provider.isFarmingSoil(state); }
 	public static boolean isManagedCrop(BlockState state) { return provider.isManagedCrop(state); }
@@ -71,8 +74,11 @@ public final class FarmingAPIManager {
 	public static boolean shouldMaintainSeasonalMoisture(ServerLevel world, BlockPos soilPos) { return provider.shouldMaintainSeasonalMoisture(world, soilPos); }
 	public static boolean applySeasonalMoisture(ServerLevel world, BlockPos soilPos, BlockState soilState) { return provider.applySeasonalMoisture(world, soilPos, soilState); }
 	public static void trackCrop(ServerLevel world, BlockPos cropPos, BlockState cropState) { provider.trackCrop(world, cropPos, cropState); }
+	public static void handleBlockStateChanged(ServerLevel world, BlockPos changedPos) { provider.handleBlockStateChanged(world, changedPos); }
 	public static boolean handleCropRandomTick(ServerLevel world, BlockPos cropPos, BlockState state, RandomSource random) { return provider.handleCropRandomTick(world, cropPos, state, random); }
 	public static boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state) { return provider.handleCropUseWithoutItem(world, cropPos, state); }
+	public static boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state, ServerPlayer player) { return provider.handleCropUseWithoutItem(world, cropPos, state, player); }
+	public static void notifyCropHarvest(ServerPlayer player, List<ItemStack> drops) { CropHarvestAPIManager.notifyHarvest(player, drops); }
 	public static boolean isCropHarvestReady(ServerLevel world, BlockPos cropPos, BlockState state) { return provider.isCropHarvestReady(world, cropPos, state); }
 	public static boolean isManagedHarvestState(ServerLevel world, BlockPos cropPos, BlockState state) { return provider.isManagedHarvestState(world, cropPos, state); }
 	public static void prepareCropHarvest(ServerLevel world, BlockPos cropPos, BlockState state) { provider.prepareCropHarvest(world, cropPos, state); }

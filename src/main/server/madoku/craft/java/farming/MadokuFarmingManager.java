@@ -4,6 +4,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.util.RandomSource;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -68,6 +69,7 @@ public final class MadokuFarmingManager {
 	public static boolean isCropPlantItem(ItemStack stack) { return FarmingCropsManager.isCropPlantItem(stack); }
 	public static void handleCropRandomTickAfter(ServerLevel world, BlockPos cropPos, BlockState state) { FarmingCropsManager.handleCropRandomTickAfter(world, cropPos, state); }
 	public static boolean usesVanillaGrowth(BlockState state) { return FarmingCropsManager.usesVanillaGrowth(state); }
+	public static boolean isVerticalCrop(BlockState state) { return FarmingCropsManager.isVerticalCrop(state); }
 	public static boolean isFarmland(BlockState state) { return FarmingCropsManager.isFarmland(state); }
 	public static boolean isFarmingSoil(BlockState state) { return FarmingCropsManager.isFarmingSoil(state); }
 	public static boolean isManagedCrop(BlockState state) { return FarmingCropsManager.isManagedCrop(state); }
@@ -98,11 +100,17 @@ public final class MadokuFarmingManager {
 	public static void trackCrop(ServerLevel world, BlockPos cropPos, BlockState cropState) {
 		FarmingCropsManager.trackCrop(world, cropPos, cropState);
 	}
+	public static void handleBlockStateChanged(ServerLevel world, BlockPos changedPos) {
+		FarmingCropsManager.handleBlockStateChanged(world, changedPos);
+	}
 	public static boolean handleCropRandomTick(ServerLevel world, BlockPos cropPos, BlockState state, RandomSource random) {
 		return FarmingCropsManager.handleCropRandomTick(world, cropPos, state, random);
 	}
 	public static boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state) {
 		return FarmingCropsManager.handleCropUseWithoutItem(world, cropPos, state);
+	}
+	public static boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state, ServerPlayer player) {
+		return FarmingCropsManager.handleCropUseWithoutItem(world, cropPos, state, player);
 	}
 	public static boolean isCropHarvestReady(ServerLevel world, BlockPos cropPos, BlockState state) {
 		return FarmingCropsManager.isCropHarvestReady(world, cropPos, state);

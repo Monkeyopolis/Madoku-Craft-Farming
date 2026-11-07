@@ -37,6 +37,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.RandomSource;
@@ -75,6 +76,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 public final class FarmingCropsManager {
 	private static final Logger LOGGER = LoggerFactory.getLogger(FarmingCropsManager.class);
+
 	private static final String LORE_GROWING_TIME_PREFIX = "Growing Time:";
 	private static final String LORE_TEMPERATURE_PREFIX = "Ideal Temperature:";
 	private static final String LORE_HUMIDITY_PREFIX = "Ideal Humidity:";
@@ -99,6 +101,8 @@ public final class FarmingCropsManager {
 	private static final String FIELD_MATURITY_YIELD_MULTIPLIER = "maturity-yield-multiplier";
 	private static final String FIELD_RAIN_BOOST_EXPIRES_AT_ABSOLUTE_DAY_TIME = "rain-boost-expires-at-absolute-day-time";
 	private static final String FIELD_MATURE_STEM_READY_AT_ABSOLUTE_DAY_TIME = "mature-stem-ready-at-absolute-day-time";
+	private static final String FIELD_MATURE_STEM_PLACEMENT_BLOCKED = "mature-stem-placement-blocked";
+	private static final String FIELD_MATURE_STEM_ADJACENT_STATE_FINGERPRINT = "mature-stem-adjacent-state-fingerprint";
 
 	private static final int CROP_MAX_AGE = 7;
 	private static final long PENDING_HARVEST_TTL_TICKS = 2L;
@@ -354,9 +358,28 @@ public final class FarmingCropsManager {
 		return resolveCropRuleByPlantingItem(stack) != null;
 	}
 
+	/**
+	 * Wakes blocked mature stems only when one of their four fruit positions or
+	 * the support below one of those positions actually changes.
+	 */
+	public static void handleBlockStateChanged(ServerLevel world, BlockPos changedPos) {
+		if (!settings.enabled || world == null || changedPos == null) {
+			return;
+		}
+
+		for (Direction direction : Direction.Plane.HORIZONTAL) {
+			wakeBlockedMatureStemIfEnvironmentChanged(world, changedPos.relative(direction));
+			wakeBlockedMatureStemIfEnvironmentChanged(world, changedPos.above().relative(direction));
+		}
+	}
+
 	public static boolean usesVanillaGrowth(BlockState state) {
 		CropRule rule = resolveCropRuleByCropState(state);
 		return rule != null && rule.usesVanillaGrowth();
+	}
+
+	public static boolean isVerticalCrop(BlockState state) {
+		return isVerticalCrop(resolveCropRuleByCropState(state));
 	}
 
 	private static boolean isVerticalCrop(CropRule rule) {
@@ -415,6 +438,21 @@ public final class FarmingCropsManager {
 			&& (state.is(BlockTags.SUPPORTS_STEM_FRUIT) || matchesCropSupport(state, rule));
 	}
 
+	private static String resolveMatureStemAdjacentStateFingerprint(ServerLevel world, BlockPos stemPos) {
+		StringBuilder fingerprint = new StringBuilder(256);
+		for (Direction direction : Direction.Plane.HORIZONTAL) {
+			BlockPos fruitPos = stemPos.relative(direction);
+			fingerprint
+				.append(direction.getName())
+				.append(':')
+				.append(world.getBlockState(fruitPos))
+				.append('|')
+				.append(world.getBlockState(fruitPos.below()))
+				.append(';');
+		}
+		return fingerprint.toString();
+	}
+
 	private static void rescheduleAdjacentMatureStemAttempts(
 		ServerLevel world,
 		BlockPos producePos,
@@ -441,10 +479,39 @@ public final class FarmingCropsManager {
 			if (crop.matureStemReadyAtAbsoluteDayTime == Long.MIN_VALUE
 				|| crop.matureStemReadyAtAbsoluteDayTime <= currentAbsoluteDayTime) {
 				crop.matureStemReadyAtAbsoluteDayTime = currentAbsoluteDayTime;
+				crop.matureStemPlacementBlocked = false;
+				crop.matureStemAdjacentStateFingerprint = null;
 				scheduleCropDue(world, crop);
 				dirty = true;
 			}
 		}
+	}
+
+	private static void wakeBlockedMatureStemIfEnvironmentChanged(ServerLevel world, BlockPos stemPos) {
+		CropState crop = findCrop(world, stemPos);
+		if (crop == null || !crop.matureStemPlacementBlocked) {
+			return;
+		}
+
+		BlockState stemState = world.getBlockState(stemPos);
+		CropRule rule = resolveCropRuleByPlantingItemId(crop.cropId);
+		if (rule == null
+			|| !rule.usesDistinctMatureBlock()
+			|| !isCropGrowthBlock(stemState, rule)
+			|| !isMaxAge(stemState)) {
+			return;
+		}
+
+		String currentFingerprint = resolveMatureStemAdjacentStateFingerprint(world, stemPos);
+		if (currentFingerprint.equals(crop.matureStemAdjacentStateFingerprint)) {
+			return;
+		}
+
+		crop.matureStemPlacementBlocked = false;
+		crop.matureStemAdjacentStateFingerprint = null;
+		crop.matureStemReadyAtAbsoluteDayTime = resolveAbsoluteDayTime(world);
+		scheduleCropDue(world, crop);
+		dirty = true;
 	}
 
 	private static boolean isCropAttachedStemFacingProduce(
@@ -548,9 +615,29 @@ public final class FarmingCropsManager {
 			BlockState cropState = world.getBlockState(basePos);
 			return isCropBlock(cropState, rule)
 				&& cropState.canSurvive(world, basePos)
-				&& matchesCropSupport(world.getBlockState(basePos.below()), rule);
+				&& matchesCropSupport(resolveCropSupportState(world, basePos.below(), rule), rule);
 		}
-		return matchesCropSupport(world.getBlockState(cropPos.below()), rule);
+		return matchesCropSupport(resolveCropSupportState(world, cropPos.below(), rule), rule);
+	}
+
+	private static BlockState resolveCropSupportState(ServerLevel world, BlockPos supportPos, CropRule rule) {
+		if (world == null || supportPos == null || rule == null) {
+			return null;
+		}
+
+		BlockState supportState = world.getBlockState(supportPos);
+		if (isCropSupportOverlay(world, supportPos, supportState)) {
+			return world.getBlockState(supportPos.below());
+		}
+		return supportState;
+	}
+
+	private static boolean isCropSupportOverlay(ServerLevel world, BlockPos supportPos, BlockState supportState) {
+		if (world == null || supportPos == null || supportState == null || supportState.isAir()) {
+			return false;
+		}
+		return supportState.is(Blocks.SNOW)
+			|| supportState.canBeReplaced() && supportState.getCollisionShape(world, supportPos).isEmpty();
 	}
 
 	private static boolean matchesCropSupport(BlockState supportState, CropRule rule) {
@@ -1139,14 +1226,15 @@ public final class FarmingCropsManager {
 		if (!settings.enabled || world == null || cropPos == null || cropState == null) {
 			return;
 		}
-
 		CropRule rule = resolveCropRuleByCropState(cropState);
 		if (rule == null) {
 			return;
 		}
 		BlockPos trackedCropPos = resolveCropBasePosition(world, cropPos, rule);
 		BlockState trackedCropState = world.getBlockState(trackedCropPos);
-		if (!isCropBlock(trackedCropState, rule) || !isCropSupport(world, trackedCropPos, rule)) {
+		boolean cropBlock = isCropBlock(trackedCropState, rule);
+		boolean cropSupport = isCropSupport(world, trackedCropPos, rule);
+		if (!cropBlock || !cropSupport) {
 			return;
 		}
 		LOADED_CHUNK_KEYS.add(cropChunkKey(world, trackedCropPos.getX() >> 4, trackedCropPos.getZ() >> 4));
@@ -1255,13 +1343,15 @@ public final class FarmingCropsManager {
 		if (!settings.enabled || world == null || cropPos == null || cropState == null) {
 			return false;
 		}
-
 		CropRule rule = resolveCropRuleByCropState(cropState);
-		if (rule == null || !isCropBlock(cropState, rule) || !isCropSupport(world, cropPos, rule)) {
+		boolean cropBlock = rule != null && isCropBlock(cropState, rule);
+		boolean cropSupport = rule != null && isCropSupport(world, cropPos, rule);
+		if (rule == null || !cropBlock || !cropSupport) {
 			return false;
 		}
 		if (rule.usesVanillaGrowth()) {
-			if (findCrop(world, cropPos) == null) {
+			CropState trackedCrop = findCrop(world, cropPos);
+			if (trackedCrop == null) {
 				trackCrop(world, cropPos, cropState);
 			}
 			// Vanilla stems own their random-tick growth and fruit placement.
@@ -1280,12 +1370,17 @@ public final class FarmingCropsManager {
 
 	/** Handles a managed crop whose vanilla harvest is performed without breaking the block. */
 	public static boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state) {
+		return handleCropUseWithoutItem(world, cropPos, state, null);
+	}
+
+	/** Handles a managed crop harvest performed without breaking the block. */
+	public static boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state, ServerPlayer player) {
 		if (!settings.enabled || world == null || cropPos == null || state == null) {
 			return false;
 		}
-
-		if (!isCropHarvestReady(world, cropPos, state)
-			|| !hasCropHarvestLootTable(world, cropPos, state)) {
+		boolean ready = isCropHarvestReady(world, cropPos, state);
+		boolean hasLootTable = hasCropHarvestLootTable(world, cropPos, state);
+		if (!ready || !hasLootTable) {
 			return false;
 		}
 
@@ -1295,6 +1390,7 @@ public final class FarmingCropsManager {
 		if (drops.isEmpty()) {
 			return false;
 		}
+		FarmingAPIManager.notifyCropHarvest(player, drops);
 
 		for (ItemStack drop : drops) {
 			if (drop != null && !drop.isEmpty()) {
@@ -1354,6 +1450,7 @@ public final class FarmingCropsManager {
 			if (normalizeCropAbsoluteTimers(crop, currentAbsoluteDayTime)) {
 				dirty = true;
 			}
+			wakeBlockedMatureStemIfEnvironmentChanged(world, cropPos);
 			refreshCropRainBoost(world, cropPos, crop);
 			if (!rule.usesVanillaGrowth()) {
 				applyElapsedCropProgress(world, cropPos, cropState, rule, crop, currentAbsoluteDayTime);
@@ -1478,7 +1575,6 @@ public final class FarmingCropsManager {
 				// their age and produce placement belong to Minecraft.
 				continue;
 			}
-
 			applyElapsedCropProgress(world, cropPos, cropState, rule, crop, currentAbsoluteDayTime);
 			operations++;
 			scheduleCropDue(world, crop);
@@ -1506,7 +1602,8 @@ public final class FarmingCropsManager {
 				&& rule.usesDistinctMatureBlock()
 				&& crop.progressGrowthTicks + CROP_DUE_EPSILON >= Math.max(1.0d, crop.requiredGrowthTicks)
 				&& !isCropMatureBlock(world.getBlockState(BlockPos.of(crop.cropPos)), rule)
-				&& !hasAdjacentCropProduce(world, BlockPos.of(crop.cropPos), rule);
+				&& !hasAdjacentCropProduce(world, BlockPos.of(crop.cropPos), rule)
+				&& !crop.matureStemPlacementBlocked;
 			if (rule == null || progressPending || blockedStemFruitPlacement) {
 				return true;
 			}
@@ -1569,6 +1666,9 @@ public final class FarmingCropsManager {
 			|| isCropMatureBlock(cropState, rule)
 			|| hasAdjacentCropProduce(world, cropPos, rule);
 		if (progress + CROP_DUE_EPSILON >= requiredTicks && rule.usesDistinctMatureBlock()) {
+			if (crop.matureStemPlacementBlocked) {
+				return Double.POSITIVE_INFINITY;
+			}
 			if (matureProducePresent && (geometry == null || !geometry.growthBlocked())) {
 				return Double.POSITIVE_INFINITY;
 			}
@@ -1770,7 +1870,6 @@ public final class FarmingCropsManager {
 		if (world == null || cropPos == null || state == null || rule == null || crop == null) {
 			return;
 		}
-
 		double requiredTicks = Math.max(1.0d, crop.requiredGrowthTicks);
 		crop.requiredGrowthTicks = requiredTicks;
 		int ageLimit = Math.max(1, getCropAgeLimit(state));
@@ -1829,11 +1928,12 @@ public final class FarmingCropsManager {
 		if (!settings.enabled || !(world instanceof ServerLevel serverLevel) || pos == null) {
 			return;
 		}
-		// The optional loot/drop bridge normally completes managed harvests. If
-		// it is absent, finish the pending player harvest here so post-harvest
-		// mechanics such as stem wilting still run.
+		// PlayerBlockBreakEvents.AFTER runs before Block.dropResources. The Compat
+		// drop bridge must receive the pending harvest first so it can notify quests
+		// with the actual drops. Finalizing here would mark the yield as consumed,
+		// causing the later drop hook to see an empty list.
 		if (hasPendingHarvest(serverLevel, pos, state)) {
-			completeCropHarvest(serverLevel, pos, state);
+			return;
 		}
 
 		CropRule brokenRule = resolveCropRuleByCropState(state);
@@ -1943,6 +2043,9 @@ public final class FarmingCropsManager {
 		if (isDirectlyPlacedMatureCrop(world, cropPos, state)) {
 			return false;
 		}
+		if (isPlayerPlacedVerticalCrop(world, cropPos, state)) {
+			return false;
+		}
 		if (resolvePendingHarvestRule(world, cropPos) != null) {
 			return true;
 		}
@@ -1963,6 +2066,9 @@ public final class FarmingCropsManager {
 		if (isDirectlyPlacedMatureCrop(world, cropPos, state)) {
 			return false;
 		}
+		if (isPlayerPlacedVerticalCrop(world, cropPos, state)) {
+			return false;
+		}
 		CropRule pendingRule = resolvePendingHarvestRule(world, cropPos);
 		if (pendingRule != null) {
 			return true;
@@ -1972,7 +2078,8 @@ public final class FarmingCropsManager {
 		if (rule == null || !isCropHarvestReady(world, cropPos, state)) {
 			return false;
 		}
-		return isVerticalCrop(rule) || !rule.usesDistinctMatureBlock() || isCropMatureBlock(state, rule);
+		boolean managed = isVerticalCrop(rule) || !rule.usesDistinctMatureBlock() || isCropMatureBlock(state, rule);
+		return managed;
 	}
 
 
@@ -1984,7 +2091,8 @@ public final class FarmingCropsManager {
 	public static List<ItemStack> calculateCropHarvestDrops(ServerLevel world, BlockPos cropPos, BlockState state, RandomSource random) {
 		purgeExpiredPendingHarvestRules();
 		CropRule rule = resolveHarvestRule(world, cropPos, state);
-		if (!settings.enabled || rule == null || !isCropHarvestReady(world, cropPos, state)) {
+		boolean ready = isCropHarvestReady(world, cropPos, state);
+		if (!settings.enabled || rule == null || !ready) {
 			return List.of();
 		}
 
@@ -2332,6 +2440,7 @@ public final class FarmingCropsManager {
 				if (isCropMatureBlock(state, rule) || hasAdjacentCropProduce(world, cropPos, rule)) {
 					crop.progressGrowthTicks = required;
 					crop.clearMatureStemCooldown();
+					crop.clearMatureStemPlacementBlock();
 					return null;
 				}
 
@@ -2347,6 +2456,7 @@ public final class FarmingCropsManager {
 						currentAbsoluteDayTime,
 						matureStemCooldownTicks
 					);
+					crop.clearMatureStemPlacementBlock();
 					crop.lastProcessedAbsoluteDayTime = Math.max(crop.lastProcessedAbsoluteDayTime, currentAbsoluteDayTime);
 					BlockState matureStemState = resolveMatureStemState(rule);
 					if (matureStemState != null && isCropGrowthBlock(state, rule) && !matureStemState.equals(state)) {
@@ -2379,17 +2489,19 @@ public final class FarmingCropsManager {
 					}
 					world.setBlockAndUpdate(cropPos, attachedStemState);
 					crop.clearMatureStemCooldown();
+					crop.clearMatureStemPlacementBlock();
 					dirty = true;
 				} else if (fruitPos == null) {
-					// Keep the stem due for a cheap retry. Another stem may have
-					// claimed one shared space, while another valid space remains
-					// available after the next block update.
-					crop.matureStemReadyAtAbsoluteDayTime = currentAbsoluteDayTime;
+					// Record the four candidate positions once. A later block-state
+					// change wakes this stem and allows one new placement scan.
+					crop.matureStemAdjacentStateFingerprint = resolveMatureStemAdjacentStateFingerprint(world, cropPos);
+					crop.matureStemPlacementBlocked = true;
 				} else if (attachedStemBlock == null && !isCropMatureBlock(state, rule) && rule.matureBlock() != null) {
 					// Preserve the existing fallback for distinct mature blocks that do
 					// not have a vanilla attached-stem block.
 					ChunkDataAPIManager.removePlayerPlacedBlock(world, cropPos);
 					world.setBlockAndUpdate(cropPos, rule.matureBlock().defaultBlockState());
+					crop.clearMatureStemPlacementBlock();
 					dirty = true;
 				}
 				crop.progressGrowthTicks = required;
@@ -2912,6 +3024,20 @@ public final class FarmingCropsManager {
 		}
 		CropRule rule = resolveCropRuleByCropState(state);
 		return rule != null && rule.usesDistinctMatureBlock() && isCropMatureBlock(state, rule);
+	}
+
+	/**
+	 * A player-placed segment of a vertical crop is the source of the column,
+	 * not harvested growth. Grown segments are not marked as player-placed and
+	 * remain eligible for farming harvests.
+	 */
+	private static boolean isPlayerPlacedVerticalCrop(ServerLevel world, BlockPos cropPos, BlockState state) {
+		if (world == null || cropPos == null || state == null
+			|| !ChunkDataAPIManager.isPlayerPlacedBlock(world, cropPos)) {
+			return false;
+		}
+		CropRule rule = resolveCropRuleByCropState(state);
+		return rule != null && isVerticalCrop(rule);
 	}
 
 	private static void applyFarmingLore(CropRule rule, Set<String> processedItemIds) {
@@ -3576,6 +3702,8 @@ public final class FarmingCropsManager {
 		private double progressGrowthTicks;
 		private long lastProcessedAbsoluteDayTime;
 		private long matureStemReadyAtAbsoluteDayTime;
+		private boolean matureStemPlacementBlocked;
+		private String matureStemAdjacentStateFingerprint;
 		private boolean maturityYieldRecorded;
 		private double maturityYieldMultiplier;
 		private long rainBoostExpiresAtAbsoluteDayTime;
@@ -3597,6 +3725,8 @@ public final class FarmingCropsManager {
 			this.progressGrowthTicks = Math.max(0.0d, Math.min(this.requiredGrowthTicks, progressGrowthTicks));
 			this.lastProcessedAbsoluteDayTime = Math.max(0L, lastProcessedAbsoluteDayTime);
 			this.matureStemReadyAtAbsoluteDayTime = Long.MIN_VALUE;
+			this.matureStemPlacementBlocked = false;
+			this.matureStemAdjacentStateFingerprint = null;
 			this.maturityYieldRecorded = false;
 			this.maturityYieldMultiplier = 1.0d;
 			this.rainBoostExpiresAtAbsoluteDayTime = Long.MIN_VALUE;
@@ -3619,6 +3749,11 @@ public final class FarmingCropsManager {
 			this.matureStemReadyAtAbsoluteDayTime = Long.MIN_VALUE;
 		}
 
+		private void clearMatureStemPlacementBlock() {
+			this.matureStemPlacementBlocked = false;
+			this.matureStemAdjacentStateFingerprint = null;
+		}
+
 		private void recordMaturityYield(double multiplier) {
 			if (maturityYieldRecorded) {
 				return;
@@ -3639,6 +3774,10 @@ public final class FarmingCropsManager {
 			data.putDouble(FIELD_PROGRESS_GROWTH_TICKS, progressGrowthTicks);
 			data.putLong(FIELD_LAST_PROCESSED_ABSOLUTE_DAY_TIME, lastProcessedAbsoluteDayTime);
 			data.putLong(FIELD_MATURE_STEM_READY_AT_ABSOLUTE_DAY_TIME, matureStemReadyAtAbsoluteDayTime);
+			data.putBoolean(FIELD_MATURE_STEM_PLACEMENT_BLOCKED, matureStemPlacementBlocked);
+			if (matureStemAdjacentStateFingerprint != null) {
+				data.putString(FIELD_MATURE_STEM_ADJACENT_STATE_FINGERPRINT, matureStemAdjacentStateFingerprint);
+			}
 			data.putBoolean(FIELD_MATURITY_YIELD_RECORDED, maturityYieldRecorded);
 			data.putDouble(FIELD_MATURITY_YIELD_MULTIPLIER, maturityYieldMultiplier);
 			data.putLong(FIELD_RAIN_BOOST_EXPIRES_AT_ABSOLUTE_DAY_TIME, rainBoostExpiresAtAbsoluteDayTime);
@@ -3687,6 +3826,18 @@ public final class FarmingCropsManager {
 				FIELD_MATURE_STEM_READY_AT_ABSOLUTE_DAY_TIME,
 				Long.MIN_VALUE
 			);
+			crop.matureStemPlacementBlocked = getBoolean(source, FIELD_MATURE_STEM_PLACEMENT_BLOCKED, false);
+			crop.matureStemAdjacentStateFingerprint = getString(
+				source,
+				FIELD_MATURE_STEM_ADJACENT_STATE_FINGERPRINT,
+				""
+			);
+			if (crop.matureStemAdjacentStateFingerprint.isEmpty()) {
+				crop.matureStemAdjacentStateFingerprint = null;
+			}
+			if (!crop.matureStemPlacementBlocked) {
+				crop.matureStemAdjacentStateFingerprint = null;
+			}
 			return crop;
 		}
 	}

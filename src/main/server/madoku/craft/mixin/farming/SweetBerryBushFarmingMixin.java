@@ -3,6 +3,7 @@ package madoku.craft.mixin.farming;
 import madoku.craft.java.farming.FarmingAPIManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -26,11 +27,14 @@ public abstract class SweetBerryBushFarmingMixin {
 		RandomSource random,
 		CallbackInfo ci
 	) {
-		if (!FarmingAPIManager.isEnabled() || !FarmingAPIManager.isManagedCrop(state)) {
+		boolean enabled = FarmingAPIManager.isEnabled();
+		boolean managed = enabled && FarmingAPIManager.isManagedCrop(state);
+		if (!enabled || !managed) {
 			return;
 		}
 
-		if (FarmingAPIManager.handleCropRandomTick(level, pos, state, random)) {
+		boolean handled = FarmingAPIManager.handleCropRandomTick(level, pos, state, random);
+		if (handled) {
 			ci.cancel();
 		}
 	}
@@ -44,15 +48,18 @@ public abstract class SweetBerryBushFarmingMixin {
 		BlockHitResult hit,
 		CallbackInfoReturnable<InteractionResult> cir
 	) {
-		if (!(level instanceof ServerLevel serverLevel) || !FarmingAPIManager.isEnabled()) {
+		boolean enabled = FarmingAPIManager.isEnabled();
+		if (!(level instanceof ServerLevel serverLevel) || !(player instanceof ServerPlayer serverPlayerEntity) || !enabled) {
 			return;
 		}
 
-		if (!FarmingAPIManager.isManagedCrop(serverLevel, pos, state)) {
+		boolean managed = FarmingAPIManager.isManagedCrop(serverLevel, pos, state);
+		if (!managed) {
 			return;
 		}
 
-		if (FarmingAPIManager.handleCropUseWithoutItem(serverLevel, pos, state)) {
+		boolean harvested = FarmingAPIManager.handleCropUseWithoutItem(serverLevel, pos, state, serverPlayerEntity);
+		if (harvested) {
 			cir.setReturnValue(InteractionResult.SUCCESS);
 		} else {
 			// Vanilla sweet berries can be harvested before the farming timer is

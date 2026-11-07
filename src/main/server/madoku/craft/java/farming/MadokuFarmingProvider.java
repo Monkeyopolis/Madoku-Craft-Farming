@@ -3,6 +3,7 @@ package madoku.craft.java.farming;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -25,6 +26,7 @@ public final class MadokuFarmingProvider implements FarmingProvider {
 	@Override public boolean isCropPlantItem(ItemStack stack) { return MadokuFarmingManager.isCropPlantItem(stack); }
 	@Override public void handleCropRandomTickAfter(ServerLevel world, BlockPos cropPos, BlockState state) { MadokuFarmingManager.handleCropRandomTickAfter(world, cropPos, state); }
 	@Override public boolean usesVanillaGrowth(BlockState state) { return MadokuFarmingManager.usesVanillaGrowth(state); }
+	@Override public boolean isVerticalCrop(BlockState state) { return MadokuFarmingManager.isVerticalCrop(state); }
 	@Override public boolean isFarmland(BlockState state) { return MadokuFarmingManager.isFarmland(state); }
 	@Override public boolean isFarmingSoil(BlockState state) { return MadokuFarmingManager.isFarmingSoil(state); }
 	@Override public boolean isManagedCrop(BlockState state) { return MadokuFarmingManager.isManagedCrop(state); }
@@ -37,8 +39,10 @@ public final class MadokuFarmingProvider implements FarmingProvider {
 	@Override public boolean shouldMaintainSeasonalMoisture(ServerLevel world, BlockPos soilPos) { return MadokuFarmingManager.shouldMaintainSeasonalMoisture(world, soilPos); }
 	@Override public boolean applySeasonalMoisture(ServerLevel world, BlockPos soilPos, BlockState soilState) { return MadokuFarmingManager.applySeasonalMoisture(world, soilPos, soilState); }
 	@Override public void trackCrop(ServerLevel world, BlockPos cropPos, BlockState cropState) { MadokuFarmingManager.trackCrop(world, cropPos, cropState); }
+	@Override public void handleBlockStateChanged(ServerLevel world, BlockPos changedPos) { MadokuFarmingManager.handleBlockStateChanged(world, changedPos); }
 	@Override public boolean handleCropRandomTick(ServerLevel world, BlockPos cropPos, BlockState state, RandomSource random) { return MadokuFarmingManager.handleCropRandomTick(world, cropPos, state, random); }
 	@Override public boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state) { return MadokuFarmingManager.handleCropUseWithoutItem(world, cropPos, state); }
+	@Override public boolean handleCropUseWithoutItem(ServerLevel world, BlockPos cropPos, BlockState state, ServerPlayer player) { return MadokuFarmingManager.handleCropUseWithoutItem(world, cropPos, state, player); }
 	@Override public boolean isCropHarvestReady(ServerLevel world, BlockPos cropPos, BlockState state) { return MadokuFarmingManager.isCropHarvestReady(world, cropPos, state); }
 	@Override public boolean isManagedHarvestState(ServerLevel world, BlockPos cropPos, BlockState state) { return MadokuFarmingManager.isManagedHarvestState(world, cropPos, state); }
 	@Override public void prepareCropHarvest(ServerLevel world, BlockPos cropPos, BlockState state) { MadokuFarmingManager.prepareCropHarvest(world, cropPos, state); }
